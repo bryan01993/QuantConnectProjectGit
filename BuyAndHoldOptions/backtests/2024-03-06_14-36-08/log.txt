@@ -1,0 +1,125 @@
+2024-03-06T13:36:45.9653140Z TRACE:: Engine.Main(): LEAN ALGORITHMIC TRADING ENGINE v2.5.0.0 Mode: DEBUG (64bit) Host: DESKTOP-J25BKHF
+2024-03-06T13:36:46.0341408Z TRACE:: Engine.Main(): Started 1:36 PM
+2024-03-06T13:36:46.0476281Z TRACE:: Config.Get(): Configuration key not found. Key: lean-manager-type - Using default value: LocalLeanManager
+2024-03-06T13:36:46.1642841Z TRACE:: JobQueue.NextJob(): Selected /LeanCLI/main.py
+2024-03-06T13:36:46.3488558Z TRACE:: Config.GetValue(): scheduled-event-leaky-bucket-capacity - Using default value: 120
+2024-03-06T13:36:46.3495074Z TRACE:: Config.GetValue(): scheduled-event-leaky-bucket-time-interval-minutes - Using default value: 1440
+2024-03-06T13:36:46.3510573Z TRACE:: Config.GetValue(): scheduled-event-leaky-bucket-refill-amount - Using default value: 18
+2024-03-06T13:36:46.3539603Z TRACE:: Config.GetValue(): storage-limit - Using default value: 10737418240
+2024-03-06T13:36:46.3546153Z TRACE:: Config.GetValue(): storage-permissions - Using default value: 3
+2024-03-06T13:36:46.3550257Z TRACE:: Config.Get(): Configuration key not found. Key: optimization-id - Using default value: 
+2024-03-06T13:36:46.3556666Z TRACE:: Config.Get(): Configuration key not found. Key: backtest-name - Using default value: local
+2024-03-06T13:36:46.3657531Z TRACE:: Config.Get(): Configuration key not found. Key: data-channel - Using default value: 
+2024-03-06T13:36:46.3664564Z TRACE:: Config.Get(): Configuration key not found. Key: python-venv - Using default value: 
+2024-03-06T13:36:46.3668101Z TRACE:: Config.Get(): Configuration key not found. Key: out-of-sample-max-end-date - Using default value: 
+2024-03-06T13:36:46.3679423Z TRACE:: Config.GetValue(): out-of-sample-days - Using default value: 0
+2024-03-06T13:36:46.3710354Z TRACE:: Config.Get(): Configuration key not found. Key: data-permission-manager - Using default value: DataPermissionManager
+2024-03-06T13:36:46.4464532Z TRACE:: Config.GetValue(): zip-data-cache-provider - Using default value: 10
+2024-03-06T13:36:46.4513215Z TRACE:: Config.Get(): Configuration key not found. Key: fundamental-data-provider - Using default value: CoarseFundamentalDataProvider
+2024-03-06T13:36:46.4613236Z TRACE:: AlgorithmManager.CreateTokenBucket(): Initializing LeakyBucket: Capacity: 120 RefillAmount: 18 TimeInterval: 1440
+2024-03-06T13:36:46.4626653Z TRACE:: Config.GetValue(): algorithm-manager-time-loop-maximum - Using default value: 20
+2024-03-06T13:36:46.4934506Z TRACE:: Engine.Run(): Resource limits '0' CPUs. 2147483647 MB RAM.
+2024-03-06T13:36:46.4946443Z TRACE:: TextSubscriptionDataSourceReader.SetCacheSize(): Setting cache size to 71582788 items
+2024-03-06T13:36:46.6901136Z TRACE:: Config.GetValue(): downloader-data-update-period - Using default value: 7
+2024-03-06T13:36:47.4237541Z TRACE:: Config.GetValue(): algorithm-creation-timeout - Using default value: 90
+2024-03-06T13:36:47.4301670Z TRACE:: PythonInitializer.Initialize(): start...
+2024-03-06T13:36:49.2550077Z TRACE:: PythonInitializer.Initialize(): ended
+2024-03-06T13:36:49.2581723Z TRACE:: AlgorithmPythonWrapper(): Python version 3.8.16 (default, Jan 17 2023, 23:21:03) 
+[GCC 11.2.0]: Importing python module main
+2024-03-06T13:36:55.7153770Z TRACE:: AlgorithmPythonWrapper(): main successfully imported.
+2024-03-06T13:36:55.7221567Z TRACE:: AlgorithmPythonWrapper(): Creating IAlgorithm instance.
+2024-03-06T13:36:55.9455254Z TRACE:: Config.GetValue(): mute-python-library-logging - Using default value: True
+2024-03-06T13:36:55.9489578Z TRACE:: LocalObjectStore.Initialize(): Storage Root: /Storage. StorageFileCount 9999999. StorageLimit 10240MB
+2024-03-06T13:36:55.9619735Z TRACE:: Config.GetValue(): zip-data-cache-provider - Using default value: 10
+2024-03-06T13:36:55.9752587Z TRACE:: HistoryProviderManager.Initialize(): history providers [SubscriptionDataReaderHistoryProvider]
+2024-03-06T13:36:55.9783710Z TRACE:: BacktestingSetupHandler.Setup(): Setting up job: UID: 116616, PID: 0, Version: 2.5.0.0, Source: WebIDE
+2024-03-06T13:36:55.9915355Z TRACE:: Config.Get(): Configuration key not found. Key: security-data-feeds - Using default value: 
+2024-03-06T13:36:56.2647711Z TRACE:: Config.GetValue(): data-feed-workers-count - Using default value: 8
+2024-03-06T13:36:56.2698368Z TRACE:: Config.GetValue(): data-feed-max-work-weight - Using default value: 400
+2024-03-06T13:36:56.2702649Z TRACE:: WeightedWorkScheduler(): will use 8 workers and MaxWorkWeight is 400
+2024-03-06T13:36:56.3361036Z TRACE:: BaseSetupHandler.SetupCurrencyConversions():
+Account Type: Margin
+
+Symbol      Quantity    Conversion = Value in USD
+USD: $      100000.00 @       1.00 = $100000
+-------------------------------------------------
+CashBook Total Value:                $100000
+
+2024-03-06T13:36:56.3442323Z TRACE:: Total margin information: TotalMarginUsed: 0.00, MarginRemaining: 100000.00
+2024-03-06T13:36:56.3455954Z TRACE:: SetUp Backtesting: User: 116616 ProjectId: 0 AlgoId: 1568774034
+2024-03-06T13:36:56.3470766Z TRACE:: Dates: Start: 10/07/2010 End: 10/11/2020 Cash: ¤100,000.00 MaximumRuntime: 100.00:00:00 MaxOrders: 2147483647
+2024-03-06T13:36:56.3524622Z TRACE:: BacktestingResultHandler(): Sample Period Set: 1316.88
+2024-03-06T13:36:56.3564526Z TRACE:: Config.GetValue(): forward-console-messages - Using default value: True
+2024-03-06T13:36:56.3613975Z TRACE:: JOB HANDLERS:
+         DataFeed:             QuantConnect.Lean.Engine.DataFeeds.FileSystemDataFeed
+         Setup:                QuantConnect.Lean.Engine.Setup.BacktestingSetupHandler
+         RealTime:             QuantConnect.Lean.Engine.RealTime.BacktestingRealTimeHandler
+         Results:              QuantConnect.Lean.Engine.Results.BacktestingResultHandler
+         Transactions:         QuantConnect.Lean.Engine.TransactionHandlers.BacktestingTransactionHandler
+         Object Store:         QuantConnect.Lean.Engine.Storage.LocalObjectStore
+         History Provider:     QuantConnect.Lean.Engine.HistoricalData.HistoryProviderManager
+         Brokerage:            QuantConnect.Brokerages.Backtesting.BacktestingBrokerage
+         Data Provider:        QuantConnect.Lean.Engine.DataFeeds.DefaultDataProvider
+
+2024-03-06T13:36:56.4758422Z TRACE:: Event Name "Daily Sampling", scheduled to run.
+2024-03-06T13:36:56.4785722Z TRACE:: AlgorithmManager.Run(): Begin DataStream - Start: 10/7/2010 12:00:00 AM Stop: 10/11/2020 11:59:59 PM Time: 10/7/2010 12:00:00 AM Warmup: False
+2024-03-06T13:36:56.5714208Z TRACE:: Debug: Launching analysis for 1568774034 with LEAN Engine v2.5.0.0
+2024-03-06T13:37:52.5299839Z TRACE:: UniverseSelection.AddPendingInternalDataFeeds(): Adding internal benchmark data feed MSFT,#0,MSFT,Hour,TradeBar,Trade,Adjusted,OpenInterest,Internal
+2024-03-06T13:37:56.3990398Z TRACE:: Isolator.ExecuteWithTimeLimit(): Used: 188, Sample: 455, App: 1473, CurrentTimeStepElapsed: 00:00.000. CPU: 12%
+2024-03-06T13:37:57.1588799Z TRACE:: Synchronizer.GetEnumerator(): Exited thread.
+2024-03-06T13:37:57.1594747Z TRACE:: AlgorithmManager.Run(): Firing On End Of Algorithm...
+2024-03-06T13:37:57.1629768Z TRACE:: Engine.Run(): Exiting Algorithm Manager
+2024-03-06T13:37:57.1693250Z TRACE:: StopSafely(): Waiting for 'Isolator Thread' thread to stop...
+2024-03-06T13:37:57.1708157Z TRACE:: FileSystemDataFeed.Exit(): Start. Setting cancellation token...
+2024-03-06T13:37:57.1764533Z TRACE:: FileSystemDataFeed.Exit(): Exit Finished.
+2024-03-06T13:37:57.1771984Z TRACE:: BacktestingResultHandler.Exit(): starting...
+2024-03-06T13:37:57.1775462Z TRACE:: BacktestingResultHandler.Exit(): Saving logs...
+2024-03-06T13:37:57.1832779Z TRACE:: Debug: Algorithm Id:(1568774034) completed in 60.80 seconds at 1k data points per second. Processing total of 77,968 data points.
+2024-03-06T13:37:57.1833477Z TRACE:: StopSafely(): Waiting for 'Result Thread' thread to stop...
+2024-03-06T13:37:57.1835333Z TRACE:: Debug: Your log was successfully created and can be retrieved from: /Results/1568774034-log.txt
+2024-03-06T13:37:57.1841094Z TRACE:: BacktestingResultHandler.Run(): Ending Thread...
+2024-03-06T13:37:57.8852505Z TRACE:: 
+STATISTICS:: Total Trades 0
+STATISTICS:: Average Win 0%
+STATISTICS:: Average Loss 0%
+STATISTICS:: Compounding Annual Return 0%
+STATISTICS:: Drawdown 0%
+STATISTICS:: Expectancy 0
+STATISTICS:: Net Profit 0%
+STATISTICS:: Sharpe Ratio 0
+STATISTICS:: Sortino Ratio 0
+STATISTICS:: Probabilistic Sharpe Ratio 0%
+STATISTICS:: Loss Rate 0%
+STATISTICS:: Win Rate 0%
+STATISTICS:: Profit-Loss Ratio 0
+STATISTICS:: Alpha 0
+STATISTICS:: Beta 0
+STATISTICS:: Annual Standard Deviation 0
+STATISTICS:: Annual Variance 0
+STATISTICS:: Information Ratio 0
+STATISTICS:: Tracking Error 0
+STATISTICS:: Treynor Ratio 0
+STATISTICS:: Total Fees $0.00
+STATISTICS:: Estimated Strategy Capacity $0
+STATISTICS:: Lowest Capacity Asset 
+STATISTICS:: Portfolio Turnover 0%
+STATISTICS:: OrderListHash d41d8cd98f00b204e9800998ecf8427e
+2024-03-06T13:37:57.8856153Z TRACE:: BacktestingResultHandler.SendAnalysisResult(): Processed final packet
+2024-03-06T13:37:57.8870433Z TRACE:: Engine.Run(): Disconnecting from brokerage...
+2024-03-06T13:37:57.8874630Z TRACE:: Engine.Run(): Disposing of setup handler...
+2024-03-06T13:37:57.8878679Z TRACE:: Engine.Main(): Analysis Completed and Results Posted.
+2024-03-06T13:37:57.8889465Z TRACE:: StopSafely(): Waiting for '' thread to stop...
+2024-03-06T13:37:57.8966633Z TRACE:: DataMonitor.GenerateReport():
+DATA USAGE:: Total data requests 28611
+DATA USAGE:: Succeeded data requests 18
+DATA USAGE:: Failed data requests 28593
+DATA USAGE:: Failed data requests percentage 100%
+DATA USAGE:: Total universe data requests 2521
+DATA USAGE:: Succeeded universe data requests 11
+DATA USAGE:: Failed universe data requests 2510
+DATA USAGE:: Failed universe data requests percentage 100%
+2024-03-06T13:37:57.9132650Z TRACE:: Engine.Main(): Packet removed from queue: 1568774034
+2024-03-06T13:37:57.9137525Z TRACE:: LeanEngineSystemHandlers.Dispose(): start...
+2024-03-06T13:37:57.9150000Z TRACE:: LeanEngineSystemHandlers.Dispose(): Disposed of system handlers.
+2024-03-06T13:37:57.9161391Z TRACE:: LeanEngineAlgorithmHandlers.Dispose(): start...
+2024-03-06T13:37:57.9171064Z TRACE:: LeanEngineAlgorithmHandlers.Dispose(): Disposed of algorithm handlers.
