@@ -3,23 +3,29 @@ from datetime import timedelta
 from PropietaryCode.decorators import timeit
 
 class BuyAndHoldOptions(QCAlgorithm):
+
+    @timeit
     def Initialize(self):
-        self.SetStartDate(2010, 10, 7)  # Set Start Date
+        self.SetStartDate(2018, 1, 1)  # Set Start Date
         self.SetEndDate(2020, 10, 11)  # Set End Date
         self.SetCash(100000)  # Set Strategy Cash
 
         # Define a list of tickers for the universe
-        self.tickers = ["MSFT", "AAPL"]
+        # For Universe methods do this same procedure in OnSecuritiesChanged
+        self.equities = ["SPY", "QQQ"]
+        for ticker in self.equities:
+            equity = self.AddEquity(ticker)
+            option = self.AddOption(ticker, resolution=Resolution.Hour)
 
+            # Option filter for each equity
+            option.SetFilter(self.UniverseFunc)
         # Add a universe of selected tickers
         self.AddUniverse(self.CoarseSelectionFunction)
 
-        equity = self.AddEquity("MSFT", Resolution.Hour)
+        equity = self.AddEquity(self.tickers, Resolution.Hour)
         equity.SetDataNormalizationMode(DataNormalizationMode.Raw)
-        self.equity = equity.Symbol
-        self.SetBenchmark(self.equity)
+        self.SetBenchmark("SPY")
         self.min_days_to_expiration = 4
-        self.option = self.AddOption("MSFT", resolution=Resolution.Hour)
         self.option.SetFilter(-3, 3, timedelta(20), timedelta(40))
         self.DebugMode = True
         self.equal_weight_allocation = 0.05
@@ -28,6 +34,7 @@ class BuyAndHoldOptions(QCAlgorithm):
 
         self.max_period_lookback = 21
         self.min_period_lookback = 21
+        self.SetWarmup(max(self.min_days_to_expiration, self.min_period_lookback))
 
         self.high = self.MAX(self.equity, self.max_period_lookback, Resolution.Daily, Field.High)
         self.low = self.MIN(self.equity, self.min_period_lookback, Resolution.Daily, Field.Low)
@@ -35,59 +42,64 @@ class BuyAndHoldOptions(QCAlgorithm):
         self.SetPortfolioConstruction(EqualWeightingPortfolioConstructionModel())
 
         self.Settings.MinimumOrderMarginPortfolioPercentage = 10
-        print("BuyAndHoldOptions Initialized")
-
+        self.Debug("BuyAndHoldOptions Initialized")
+    @timeit
+    def UniverseFunc(self, universe):
+        return universe.IncludeWeeklys()\
+                       .Strikes(-3, 3)\
+                       .Expiration(timedelta(days=20), timedelta(days=40))
+    @timeit
     def CoarseSelectionFunction(self, coarse):
         # Filter the universe for only the tickers we're interested in
         filtered_symbols = [x.Symbol for x in coarse if x.Symbol.Value in self.tickers]
         return filtered_symbols
 
-    def BuyCall(self, chains):
-        """Method to execute to open a long position on a call option chain"""
-        # self.Log(f"Attempting to BuyCall")
-        # self.Debug(f"Attempting to BuyCall")
-        expiry = sorted(chains, key=lambda x: x.Expiry, reverse=True)[0].Expiry
-        calls = [i for i in chains if i.Expiry == expiry and i.Right == OptionRight.Call]
-        call_contracts = sorted(calls, key=lambda x: abs(x.Strike - x.UnderlyingLastPrice))
-        if len(call_contracts) == 0:
-            return
-        self.call = call_contracts[0]
-        self.Debug(f"BUY CALL: {self.call} type {type(self.call)}")
-
-        quantity = int(
-            round(((self.equal_weight_allocation * self.Portfolio.TotalPortfolioValue) / (self.call.AskPrice * 100)),
-                  0))
-        self.Debug(
-            f"weight: {self.equal_weight_allocation}; Port {self.Portfolio.TotalPortfolioValue}; Ask Price: {self.call.AskPrice}; quantity to purchase: {quantity}")
-        insight = Insight.Price(self.call.Symbol, timedelta(40), InsightDirection.Up, None, None,
-                                sourceModel='BuyAndHoldOptions', weight=self.equal_weight_allocation)
-        self.EmitInsights(insight)
-        # self.EmitInsights(Insight.Price(self.call.Symbol, timedelta(40), InsightDirection.Up))
-        self.Buy(self.call.Symbol, quantity).UpdateTag("Open Long Call Position")
-
-    def SellCall(self, chains):
-        """Method to execute to open a short position on a call option chain"""
-        # self.Log(f"Attempting to SellCall")
-        # self.Debug(f"Attempting to SellCall")
-        expiry = sorted(chains, key=lambda x: x.Expiry, reverse=False)[0].Expiry
-        calls = [i for i in chains if i.Expiry == expiry and i.Right == OptionRight.Call]
-        call_contracts = sorted(calls, key=lambda x: abs(x.Strike - x.UnderlyingLastPrice))
-        if len(call_contracts) == 0:
-            return
-        self.call = call_contracts[0]
-        self.Debug(f"SELL CALL: {self.call} type {type(self.call)}")
-
-        quantity = int(
-            round(((self.equal_weight_allocation * self.Portfolio.TotalPortfolioValue) / (self.call.BidPrice * 100)),
-                  0))
-        self.Debug(
-            f"weight: {self.equal_weight_allocation}; Port {self.Portfolio.TotalPortfolioValue}; Bid Price: {self.call.BidPrice}; quantity to purchase: {quantity}")
-        insight = Insight.Price(self.call.Symbol, timedelta(40), InsightDirection.Up, None, None,
-                                sourceModel='BuyAndHoldOptions', weight=self.equal_weight_allocation)
-        self.EmitInsights(insight)
-        # self.EmitInsights(Insight.Price(self.call.Symbol, timedelta(40), InsightDirection.Down))
-        self.Sell(self.call.Symbol, quantity).UpdateTag("Open Short Call Position")
-
+    # def BuyCall(self, chains):
+    #     """Method to execute to open a long position on a call option chain"""
+    #     # self.Log(f"Attempting to BuyCall")
+    #     # self.Debug(f"Attempting to BuyCall")
+    #     expiry = sorted(chains, key=lambda x: x.Expiry, reverse=True)[0].Expiry
+    #     calls = [i for i in chains if i.Expiry == expiry and i.Right == OptionRight.Call]
+    #     call_contracts = sorted(calls, key=lambda x: abs(x.Strike - x.UnderlyingLastPrice))
+    #     if len(call_contracts) == 0:
+    #         return
+    #     self.call = call_contracts[0]
+    #     self.Debug(f"BUY CALL: {self.call} type {type(self.call)}")
+    #
+    #     quantity = int(
+    #         round(((self.equal_weight_allocation * self.Portfolio.TotalPortfolioValue) / (self.call.AskPrice * 100)),
+    #               0))
+    #     self.Debug(
+    #         f"weight: {self.equal_weight_allocation}; Port {self.Portfolio.TotalPortfolioValue}; Ask Price: {self.call.AskPrice}; quantity to purchase: {quantity}")
+    #     insight = Insight.Price(self.call.Symbol, timedelta(40), InsightDirection.Up, None, None,
+    #                             sourceModel='BuyAndHoldOptions', weight=self.equal_weight_allocation)
+    #     self.EmitInsights(insight)
+    #     # self.EmitInsights(Insight.Price(self.call.Symbol, timedelta(40), InsightDirection.Up))
+    #     self.Buy(self.call.Symbol, quantity).UpdateTag("Open Long Call Position")
+    #
+    # def SellCall(self, chains):
+    #     """Method to execute to open a short position on a call option chain"""
+    #     # self.Log(f"Attempting to SellCall")
+    #     # self.Debug(f"Attempting to SellCall")
+    #     expiry = sorted(chains, key=lambda x: x.Expiry, reverse=False)[0].Expiry
+    #     calls = [i for i in chains if i.Expiry == expiry and i.Right == OptionRight.Call]
+    #     call_contracts = sorted(calls, key=lambda x: abs(x.Strike - x.UnderlyingLastPrice))
+    #     if len(call_contracts) == 0:
+    #         return
+    #     self.call = call_contracts[0]
+    #     self.Debug(f"SELL CALL: {self.call} type {type(self.call)}")
+    #
+    #     quantity = int(
+    #         round(((self.equal_weight_allocation * self.Portfolio.TotalPortfolioValue) / (self.call.BidPrice * 100)),
+    #               0))
+    #     self.Debug(
+    #         f"weight: {self.equal_weight_allocation}; Port {self.Portfolio.TotalPortfolioValue}; Bid Price: {self.call.BidPrice}; quantity to purchase: {quantity}")
+    #     insight = Insight.Price(self.call.Symbol, timedelta(40), InsightDirection.Up, None, None,
+    #                             sourceModel='BuyAndHoldOptions', weight=self.equal_weight_allocation)
+    #     self.EmitInsights(insight)
+    #     # self.EmitInsights(Insight.Price(self.call.Symbol, timedelta(40), InsightDirection.Down))
+    #     self.Sell(self.call.Symbol, quantity).UpdateTag("Open Short Call Position")
+    @timeit
     def OnData(self, data):
         """OnData event is the primary entry point for your algorithm. Each new data point will be pumped in here.
             Arguments:
@@ -145,6 +157,7 @@ class BuyAndHoldOptions(QCAlgorithm):
     #         .Strikes(-1, 1) \
     #         .Expiration(timedelta(0), timedelta(10))
 
+    @timeit
     def OnOrderEvent(self, orderEvent):
         """ Liquidate stocks in case an option has been exercised"""
         order = self.Transactions.GetOrderById(orderEvent.OrderId)
