@@ -6,7 +6,7 @@ from typing import Optional, Any
 from AlgorithmImports import *
 from QuantConnect.Data.Fundamental import MorningstarSectorCode
 from datetime import timedelta
-from ..PropietaryCode.decorators import timeit
+from PropietaryCode.decorators import timeit
 from QuantConnect.Algorithm import QCAlgorithm
 import statsmodels.tsa.stattools as ts
 import statsmodels.api as sm

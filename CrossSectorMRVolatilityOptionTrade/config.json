@@ -5,5 +5,11 @@
     "cloud-id": 16337121,
     "organization-id": "6bfd78b1c53c2e682ab8f3635d854f13",
     "python-venv": 1,
-    "encrypted": false
+    "encrypted": false,
+    "libraries": [
+        {
+            "name": "PropietaryCode",
+            "path": "Library\\PropietaryCode"
+        }
+    ]
 }

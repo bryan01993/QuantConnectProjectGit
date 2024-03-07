@@ -1,11 +1,9 @@
 from AlgorithmImports import *
 from datetime import timedelta
-from ..PropietaryCode.example import simple_function
-
+from PropietaryCode.decorators import timeit
 
 class BuyAndHoldOptions(QCAlgorithm):
     def Initialize(self):
-        simple_function()
         self.SetStartDate(2010, 10, 7)  # Set Start Date
         self.SetEndDate(2020, 10, 11)  # Set End Date
         self.SetCash(100000)  # Set Strategy Cash
@@ -23,7 +21,7 @@ class BuyAndHoldOptions(QCAlgorithm):
         self.min_days_to_expiration = 4
         self.option = self.AddOption("MSFT", resolution=Resolution.Hour)
         self.option.SetFilter(-3, 3, timedelta(20), timedelta(40))
-
+        self.DebugMode = True
         self.equal_weight_allocation = 0.05
         self.max_sl_percent = -0.5
         self.max_tp_percent = 1.0
