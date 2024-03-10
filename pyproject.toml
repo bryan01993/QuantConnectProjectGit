@@ -9,6 +9,8 @@ readme = "README.md"
 python = "^3.10"
 lean = "^1.0.185"
 statsmodels = "^0.14.1"
+pydevd-pycharm = "^241.14494.19"
+graphviz = "^0.20.1"
 
 
 [build-system]

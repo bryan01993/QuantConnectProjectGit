@@ -1,36 +1,33 @@
 from AlgorithmImports import *
 from datetime import timedelta
 from PropietaryCode.decorators import timeit
+import pydevd_pycharm
+pydevd_pycharm.settrace('localhost', port=6000, stdoutToServer=True, stderrToServer=True)
+
 
 class BuyAndHoldOptions(QCAlgorithm):
 
     @timeit
     def Initialize(self):
-        self.SetStartDate(2018, 1, 1)  # Set Start Date
-        self.SetEndDate(2020, 10, 11)  # Set End Date
+        self.SetStartDate(2015, 1, 1)  # Set Start Date
+        self.SetEndDate(2015, 12, 31)  # Set End Date
         self.SetCash(100000)  # Set Strategy Cash
 
         # Define a list of tickers for the universe
         # For Universe methods do this same procedure in OnSecuritiesChanged
-        self.equities = ["SPY", "QQQ"]
+        self.equities = ["AAPL", "GOOG"]
         for ticker in self.equities:
             equity = self.AddEquity(ticker)
-            option = self.AddOption(ticker, resolution=Resolution.Hour)
+            option = self.AddOption(ticker, resolution=Resolution.Daily)
 
             # Option filter for each equity
             option.SetFilter(self.UniverseFunc)
+
         # Add a universe of selected tickers
         self.AddUniverse(self.CoarseSelectionFunction)
 
-        equity = self.AddEquity(self.tickers, Resolution.Hour)
-        equity.SetDataNormalizationMode(DataNormalizationMode.Raw)
         self.SetBenchmark("SPY")
-        self.min_days_to_expiration = 4
-        self.option.SetFilter(-3, 3, timedelta(20), timedelta(40))
         self.DebugMode = True
-        self.equal_weight_allocation = 0.05
-        self.max_sl_percent = -0.5
-        self.max_tp_percent = 1.0
 
         self.max_period_lookback = 21
         self.min_period_lookback = 21
@@ -43,15 +40,18 @@ class BuyAndHoldOptions(QCAlgorithm):
 
         self.Settings.MinimumOrderMarginPortfolioPercentage = 10
         self.Debug("BuyAndHoldOptions Initialized")
+
     @timeit
     def UniverseFunc(self, universe):
-        return universe.IncludeWeeklys()\
-                       .Strikes(-3, 3)\
-                       .Expiration(timedelta(days=20), timedelta(days=40))
+        return universe.IncludeWeeklys() \
+            .Strikes(-3, 3) \
+            .Expiration(timedelta(days=20), timedelta(days=40))
+
     @timeit
     def CoarseSelectionFunction(self, coarse):
         # Filter the universe for only the tickers we're interested in
-        filtered_symbols = [x.Symbol for x in coarse if x.Symbol.Value in self.tickers]
+        filtered_symbols = [x.Symbol for x in coarse if x.Symbol.Value in self.equities]
+        self.Log(f"filtered_symbols: {filtered_symbols}")
         return filtered_symbols
 
     # def BuyCall(self, chains):
@@ -99,63 +99,82 @@ class BuyAndHoldOptions(QCAlgorithm):
     #     self.EmitInsights(insight)
     #     # self.EmitInsights(Insight.Price(self.call.Symbol, timedelta(40), InsightDirection.Down))
     #     self.Sell(self.call.Symbol, quantity).UpdateTag("Open Short Call Position")
+
     @timeit
-    def OnData(self, data):
-        """OnData event is the primary entry point for your algorithm. Each new data point will be pumped in here.
-            Arguments:
-                data: Slice object keyed by symbol containing the stock data
-        """
+    def OnData(self, slice):
+        if not self.Portfolio.Invested:
+            for kvp in slice.OptionChains:
+                if kvp.Key not in self.Securities:
+                    continue
 
-        # Checks if high value exists
-        if not self.high.IsReady:
-            self.Debug(f"High indicator is not ready")
-            return
+                chain = kvp.Value
+                self.Log(f"Option chain for {kvp.Key} received at {self.Time}")
 
-        # Checks if there is an option position
-        option_invested = [x.Key for x in self.Portfolio if x.Value.Invested and x.Value.Type == SecurityType.Option]
+                # Buy and hold logic for options goes here
+                # This is an example to buy a contract if not yet invested
+                # You need to replace it with your own logic
+                for contract in chain:
+                    if contract.Right == OptionRight.Call and contract.Expiry.date() > self.Time.date():
+                        self.Buy(contract.Symbol, 1)
+                        break
 
-        # If there is an option position liquidate whenever too close to expiration date
-        if option_invested:
-            # self.Log(f'Current amount of positions {len(option_invested)}')
-            if self.Time + timedelta(self.min_days_to_expiration) >= option_invested[0].ID.Date:
-                self.Liquidate(option_invested[0], "Too close to expiration")
-                return
-            else:
-                # Check if the option position has lost 50% or more of its value
-                for option_symbol in option_invested:
-                    # self.Log('Looping through positions')
-                    option_security = self.Securities[option_symbol]
-                    # Calculate the loss percentage from the average price and current price
-                    trade_open_profit_percentage = (
-                                                               option_security.Price - option_security.Holdings.AveragePrice) / option_security.Holdings.AveragePrice
-                    # If the loss exceeds 50%, liquidate the position with a market order
-                    if trade_open_profit_percentage <= self.max_sl_percent:
-                        self.Liquidate(option_symbol, f"Cutting losses at {trade_open_profit_percentage}")
-                    if trade_open_profit_percentage > self.max_tp_percent:
-                        self.Liquidate(option_symbol, f"Taking profit at {trade_open_profit_percentage}")
-            return
-
-        # Strategy Logic Long
-        if self.Securities[self.equity].Price >= self.high.Current.Value:
-            for i in data.OptionChains:
-                chains = i.Value
-                self.BuyCall(chains)
-
-        # Strategy Logic Short
-        if self.Securities[self.equity].Price <= self.low.Current.Value:
-            for i in data.OptionChains:
-                chains = i.Value
-                self.SellCall(chains)
-
-        # Checks if invested
-        # if not self.Portfolio.Invested:
-        #     # self.SetHoldings("SPY", 1)
-        #     self.Debug("Not invested yet")
-
-    # def UniverseFunc(self, universe):
-    #     return universe.IncludeWeeklys() \
-    #         .Strikes(-1, 1) \
-    #         .Expiration(timedelta(0), timedelta(10))
+    # @timeit
+    # def OnData(self, data):
+    #     """OnData event is the primary entry point for your algorithm. Each new data point will be pumped in here.
+    #         Arguments:
+    #             data: Slice object keyed by symbol containing the stock data
+    #     """
+    #
+    #     # Checks if high value exists
+    #     if not self.high.IsReady:
+    #         self.Debug(f"High indicator is not ready")
+    #         return
+    #
+    #     # Checks if there is an option position
+    #     option_invested = [x.Key for x in self.Portfolio if x.Value.Invested and x.Value.Type == SecurityType.Option]
+    #
+    #     # If there is an option position liquidate whenever too close to expiration date
+    #     if option_invested:
+    #         # self.Log(f'Current amount of positions {len(option_invested)}')
+    #         if self.Time + timedelta(self.min_days_to_expiration) >= option_invested[0].ID.Date:
+    #             self.Liquidate(option_invested[0], "Too close to expiration")
+    #             return
+    #         else:
+    #             # Check if the option position has lost 50% or more of its value
+    #             for option_symbol in option_invested:
+    #                 # self.Log('Looping through positions')
+    #                 option_security = self.Securities[option_symbol]
+    #                 # Calculate the loss percentage from the average price and current price
+    #                 trade_open_profit_percentage = (
+    #                                                            option_security.Price - option_security.Holdings.AveragePrice) / option_security.Holdings.AveragePrice
+    #                 # If the loss exceeds 50%, liquidate the position with a market order
+    #                 if trade_open_profit_percentage <= self.max_sl_percent:
+    #                     self.Liquidate(option_symbol, f"Cutting losses at {trade_open_profit_percentage}")
+    #                 if trade_open_profit_percentage > self.max_tp_percent:
+    #                     self.Liquidate(option_symbol, f"Taking profit at {trade_open_profit_percentage}")
+    #         return
+    #
+    #     # Strategy Logic Long
+    #     if self.Securities[self.equity].Price >= self.high.Current.Value:
+    #         for i in data.OptionChains:
+    #             chains = i.Value
+    #             self.BuyCall(chains)
+    #
+    #     # Strategy Logic Short
+    #     if self.Securities[self.equity].Price <= self.low.Current.Value:
+    #         for i in data.OptionChains:
+    #             chains = i.Value
+    #             self.SellCall(chains)
+    #
+    #     # Checks if invested
+    #     # if not self.Portfolio.Invested:
+    #     #     # self.SetHoldings("SPY", 1)
+    #     #     self.Debug("Not invested yet")
+    #
+    # # def UniverseFunc(self, universe):
+    # #     return universe.IncludeWeeklys() \
+    # #         .Strikes(-1, 1) \
+    # #         .Expiration(timedelta(0), timedelta(10))
 
     @timeit
     def OnOrderEvent(self, orderEvent):
@@ -164,4 +183,4 @@ class BuyAndHoldOptions(QCAlgorithm):
         self.Log(
             f"OrderEvent FillPrice{orderEvent.FillPrice}; OrderStatus {orderEvent.Status}; Order ID{orderEvent.OrderId}; Quantity {orderEvent.Quantity}")
         if order.Type == OrderType.OptionExercise:
-            self.Liquidate(tag="Liquidation of exercised stocks")
+            self.Liquidate(tag="Liquidation")
