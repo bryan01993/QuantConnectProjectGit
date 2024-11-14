@@ -6,7 +6,7 @@ from typing import Optional, Any
 from AlgorithmImports import *
 from QuantConnect.Data.Fundamental import MorningstarSectorCode
 from datetime import timedelta
-from PropietaryCode.decorators import timeit
+from PropietaryCode.decorators import FunctionLogger
 from QuantConnect.Algorithm import QCAlgorithm
 import statsmodels.tsa.stattools as ts
 import statsmodels.api as sm
@@ -21,6 +21,7 @@ class UniverseSectorMROptions(QCAlgorithm):
         self.OptionChains = None
 
     def Initialize(self):
+        self.logger = FunctionLogger(self)
         self.SetStartDate(2018, 1, 1)  # Set Start Date
         self.SetEndDate(2019, 6, 1)  # Set End Date
         self.SetCash(100000)  # Set Strategy Cash
@@ -51,7 +52,7 @@ class UniverseSectorMROptions(QCAlgorithm):
         self.max_opt_days_to_exp = 90
         self.SetPortfolioConstruction(CustomEqualWeightingPCM(max_weight_per_insight=0.01))
 
-    @timeit
+    @FunctionLogger.log
     def OnSecuritiesChanged(self, changes):
         pass
         # for security in changes.AddedSecurities:
@@ -62,7 +63,7 @@ class UniverseSectorMROptions(QCAlgorithm):
         # self.AddEquity(security.Symbol, Resolution.Daily)
         # self.Log(f'OSC1 removed {security}')
 
-    @timeit
+    @FunctionLogger.log
     def CoarseSelectionFunction(self, coarse) -> list:
         # Filter for stocks that are liquid enough and if they have enough fundamental data.
         self.filtered_by_price = sorted(
@@ -72,7 +73,7 @@ class UniverseSectorMROptions(QCAlgorithm):
                                  :self.max_coarse_stocks]
         return [symbol for symbol, _ in self.filtered_by_price]
 
-    @timeit
+    @FunctionLogger.log
     def FineSelectionFunction(self, fine) -> list:
         # Filter for stocks that belong to one specific sector
         self.financial_services_stocks = [sec.Symbol for sec in fine
@@ -97,6 +98,7 @@ class UniverseSectorMROptions(QCAlgorithm):
 
         return self.optionable_stocks
 
+    @FunctionLogger.log
     def GetOptionsByInsight(self, insight_direction: str, reversion_time: timedelta) -> Optional[Any]:
         target_expiration = self.Time + timedelta(days=reversion_time.days * self.target_dtexp_multiplier)
         option_chain = self.OptionChainProvider.GetOptionContractList(self.security.Symbol, self.Time)  # To abandon
@@ -133,6 +135,8 @@ class UniverseSectorMROptions(QCAlgorithm):
         else:
             return None
 
+
+    @FunctionLogger.log
     def SelectSingleDirectionalOptions(self, list_of_options):
         # # Select near-the-money call option
         current_price = self.security.Price
@@ -143,12 +147,14 @@ class UniverseSectorMROptions(QCAlgorithm):
         else:
             return None
 
+    @FunctionLogger.log
     def ExecutionOptionOrder(self, max_amount: float, option_price: float, option_selected: list):
         if option_selected:
             options_quantity = self.CalculateOptionQuantity(self, max_amount, option_price)
             self.Buy(option_selected.Symbol, options_quantity)
             return None
 
+    @FunctionLogger.log
     def CalculateOptionQuantity(self, max_amount: float, option_price: float) -> int:
         quantity = int(round(((max_amount) / (self.option_price.BidPrice * 100)), 0))
         self.Debug(
@@ -199,7 +205,7 @@ class UniverseSectorMROptions(QCAlgorithm):
                             # if option_selected:
                             #     option_order_execution = self.ExecutionOptionOrder(max_amount=1000, option_price=option_selected.BidPrice, option_selected=option_selected)
 
-    # @timeit
+    @FunctionLogger.log
     def ApplyADFTest(self, price_series) -> bool:
         if len(price_series) > self.historical_data_days_backward * 0.5:
             adf_result = ts.adfuller(price_series)
@@ -212,11 +218,13 @@ class UniverseSectorMROptions(QCAlgorithm):
         else:
             return False
 
+    @FunctionLogger.log
     def ApplyHurstTest(self, price_series):
         # Implement Hurst exponent calculation
         # it's another method to replace ADF to test for mean reversion time series
         pass
 
+    @FunctionLogger.log
     def FitOUProcess(self, price_series) -> (timedelta, float):
         """
         Fit an Ornstein-Uhlenbeck process to the given price series and
@@ -254,7 +262,7 @@ class UniverseSectorMROptions(QCAlgorithm):
             self.Log(f"FOUPE Error in fitting OU process: {str(e)}")
             return None, None
 
-    @timeit
+    @FunctionLogger.log
     def CalculateZScore(self, price_series) -> Optional[float]:
         try:
             # Linear regression with time as the independent variable
@@ -275,7 +283,7 @@ class UniverseSectorMROptions(QCAlgorithm):
             self.Log(f"Error in calculating Z-score: {str(e)}")
             return None
 
-    @timeit
+    @FunctionLogger.log
     def EvaluateZScore(self, z_score: float) -> str:
         # self.Debug(f'z_score received {z_score}')
         if z_score <= -2:
@@ -288,7 +296,7 @@ class UniverseSectorMROptions(QCAlgorithm):
             # self.Debug(f'Unexpected value {z_score}') # Unexpected value 1.2865 ## WHY? you dumbfuck
             return f'Unexpected value {z_score} with type {type(z_score)}'
 
-    # @timeit
+    @FunctionLogger.log
     def CreateOptionDirectionalInsight(self, insight_direction: str, insight_duration: timedelta, mean_level: float,
                                        option_selected):
         if option_selected:
@@ -323,7 +331,7 @@ class UniverseSectorMROptions(QCAlgorithm):
                 self.Log(f"Found the following exception when emitting insight. {e}")
                 return None
 
-    @timeit
+    @FunctionLogger.log
     def EnsureAllVariables(self, z_score: float, reversion_time: timedelta, mean_level: float) -> bool:
         if z_score is not None and reversion_time is not None and mean_level is not None:
             return True
@@ -331,6 +339,7 @@ class UniverseSectorMROptions(QCAlgorithm):
             self.Debug(f'Unexpected values encountered')
             return False
 
+    @FunctionLogger.log
     def OnEndOfAlgorithm(self):
         endTime = self.Time  # Store the end time of the algorithm
         duration = endTime - self.startTime

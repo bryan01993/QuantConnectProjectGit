@@ -1,0 +1,25 @@
+LAB_USERS:
+  - LAB_NUMBER: 101
+    LAB_USER: alice.smith@example.com
+    LAB_PWD: A1b2C3d4
+    LAB_COUNTRY: USA
+
+  - LAB_NUMBER: 102
+    LAB_USER: bob.jones@example.com
+    LAB_PWD: Xy9Z8w7V
+    LAB_COUNTRY: CAN
+
+  - LAB_NUMBER: 103
+    LAB_USER: carol.white@example.com
+    LAB_PWD: M3n4O5p6
+    LAB_COUNTRY: GBR
+
+  - LAB_NUMBER: 104
+    LAB_USER: david.brown@example.com
+    LAB_PWD: Qr7S8t9U
+    LAB_COUNTRY: AUS
+
+  - LAB_NUMBER: 105
+    LAB_USER: eve.davis@example.com
+    LAB_PWD: Vw1X2y3Z
+    LAB_COUNTRY: IND

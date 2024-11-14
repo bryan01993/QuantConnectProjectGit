@@ -11,7 +11,7 @@ def launch_cloud_backtest(project_name: str, bt_number: int):
     # Command to launch the cloud backtest
     #TODO take last serialnumber using bt_handler function to extract last report.
     #TODO take start and end_date from the algo at execution time
-    pre_command = f"lean cloud push {project_name} "
+    pre_command = f"lean cloud push"
     command = f"lean cloud backtest {project_name} --name {project_name}_{bt_number}_start_end --push --verbose"
 
     try:
@@ -36,4 +36,4 @@ def launch_cloud_backtest(project_name: str, bt_number: int):
         print(e)
 
 # Example usage:
-launch_cloud_backtest("BuyAndHoldOptions", 5)
+launch_cloud_backtest("BuyAndHoldOptions", 18)

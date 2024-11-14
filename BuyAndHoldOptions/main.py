@@ -1,14 +1,17 @@
 from AlgorithmImports import *
 from datetime import timedelta
-from PropietaryCode.decorators import timeit
-import pydevd_pycharm
-pydevd_pycharm.settrace('localhost', port=6000, stdoutToServer=True, stderrToServer=True)
+from PropietaryCode.decorators import FunctionLogger
+from PropietaryCode.BSMModel import BsmModel
+
+
+# import pydevd_pycharm
+# pydevd_pycharm.settrace('localhost', port=6000, stdoutToServer=True, stderrToServer=True)
 
 
 class BuyAndHoldOptions(QCAlgorithm):
 
-    @timeit
     def Initialize(self):
+        self.logger = FunctionLogger(self)
         self.SetStartDate(2015, 1, 1)  # Set Start Date
         self.SetEndDate(2015, 12, 31)  # Set End Date
         self.SetCash(100000)  # Set Strategy Cash
@@ -27,31 +30,30 @@ class BuyAndHoldOptions(QCAlgorithm):
         self.AddUniverse(self.CoarseSelectionFunction)
 
         self.SetBenchmark("SPY")
-        self.DebugMode = True
+        # self.DebugMode = True
 
         self.max_period_lookback = 21
         self.min_period_lookback = 21
-        self.SetWarmup(max(self.min_days_to_expiration, self.min_period_lookback))
 
-        self.high = self.MAX(self.equity, self.max_period_lookback, Resolution.Daily, Field.High)
-        self.low = self.MIN(self.equity, self.min_period_lookback, Resolution.Daily, Field.Low)
+        # self.high = self.MAX(self.equity, self.max_period_lookback, Resolution.Daily, Field.High)
+        # self.low = self.MIN(self.equity, self.min_period_lookback, Resolution.Daily, Field.Low)
 
         self.SetPortfolioConstruction(EqualWeightingPortfolioConstructionModel())
-
+        self.risk_free_interest_rate = self.RiskFreeInterestRateModel.GetInterestRate(self.Time)
         self.Settings.MinimumOrderMarginPortfolioPercentage = 10
         self.Debug("BuyAndHoldOptions Initialized")
 
-    @timeit
+    @FunctionLogger.log
     def UniverseFunc(self, universe):
         return universe.IncludeWeeklys() \
-            .Strikes(-3, 3) \
+            .Strikes(-2, 2) \
             .Expiration(timedelta(days=20), timedelta(days=40))
 
-    @timeit
+    @FunctionLogger.log
     def CoarseSelectionFunction(self, coarse):
         # Filter the universe for only the tickers we're interested in
         filtered_symbols = [x.Symbol for x in coarse if x.Symbol.Value in self.equities]
-        self.Log(f"filtered_symbols: {filtered_symbols}")
+        # self.Log(f"filtered_symbols: {filtered_symbols}")
         return filtered_symbols
 
     # def BuyCall(self, chains):
@@ -100,22 +102,54 @@ class BuyAndHoldOptions(QCAlgorithm):
     #     # self.EmitInsights(Insight.Price(self.call.Symbol, timedelta(40), InsightDirection.Down))
     #     self.Sell(self.call.Symbol, quantity).UpdateTag("Open Short Call Position")
 
-    @timeit
+    @FunctionLogger.log
+    def CalculateVolatility(self, underlying_symbol):
+        """Scheduled event to calculate volatility daily"""
+        try:
+            self.lookback = 252
+            history = self.History(underlying_symbol, self.lookback + 1, Resolution.Daily).close.pct_change().dropna()
+            underlying_volatility = round(np.std(history) * np.sqrt(252), 4)  # Annualized Volatility
+            return underlying_volatility
+        except Exception as e:
+            self.Debug(f"Exception: {e}")
+            return
+
+    @FunctionLogger.log
+    def get_current_underlying_price(self, slice):
+        return
+
+    # @timeit
     def OnData(self, slice):
         if not self.Portfolio.Invested:
             for kvp in slice.OptionChains:
                 if kvp.Key not in self.Securities:
                     continue
-
                 chain = kvp.Value
-                self.Log(f"Option chain for {kvp.Key} received at {self.Time}")
-
                 # Buy and hold logic for options goes here
                 # This is an example to buy a contract if not yet invested
                 # You need to replace it with your own logic
+                # get underlying volatility
                 for contract in chain:
                     if contract.Right == OptionRight.Call and contract.Expiry.date() > self.Time.date():
-                        self.Buy(contract.Symbol, 1)
+                        under_vol = self.CalculateVolatility(underlying_symbol=contract.UnderlyingSymbol)
+                        # self.Log(f"Contract Underlying symbol and price: {contract.UnderlyingSymbol}, {self.Securities[contract.UnderlyingSymbol].Price}")
+                        # self.Debug(f"under_vol = {under_vol}")
+                        # self.Debug(f"k: {contract.Strike}, option_price: {self.Securities[contract.Symbol].Price}")
+                        days_to_expiration = (contract.Expiry - self.Time).days
+                        self.BSM_price = BsmModel(option_type='c',
+                                                  price=self.Securities[contract.UnderlyingSymbol].Price,
+                                                  strike=contract.Strike,
+                                                  interest_rate=self.risk_free_interest_rate,
+                                                  expiry=days_to_expiration,
+                                                  volatility=under_vol).bsm_price()
+                        self.Log(
+                            f"Time {self.Time};{contract.Strike},{contract.Expiry},{self.BSM_price};{contract.AskPrice};{contract.UnderlyingSymbol};{under_vol}")
+                        if self.BSM_price > contract.LastPrice:
+                            self.Buy(contract.Symbol, 1)
+                        elif self.BSM_price < contract.LastPrice:
+                            self.Sell(contract.Symbol, 1)
+                        else:
+                            self.Debug(f"Neither escenario happened")
                         break
 
     # @timeit
@@ -176,7 +210,7 @@ class BuyAndHoldOptions(QCAlgorithm):
     # #         .Strikes(-1, 1) \
     # #         .Expiration(timedelta(0), timedelta(10))
 
-    @timeit
+    @FunctionLogger.log
     def OnOrderEvent(self, orderEvent):
         """ Liquidate stocks in case an option has been exercised"""
         order = self.Transactions.GetOrderById(orderEvent.OrderId)

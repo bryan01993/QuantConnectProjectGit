@@ -19,6 +19,13 @@ def list_backtests(api_key, project_id):
     # Make the API request
     response = requests.get(url, headers=headers)
     #TODO Fix api_key is not recognized response = {'errorCode': 10002, 'errors': ['The API token hash is not valid. This could be due to an old hash, invalid API token, or an invalid timestamp.'], 'success': False}
+    """ Esta parte va dirigida hacia la logica que lleva los backtests en un orden especifico, por lo que es es necesario implementarlo como una libreria para todos los algoritmos desarrollados"""
+    #
+    # ### List backtests objects in cloud TODO get the names of the files rather than their place in memory
+    # list_projects = api.ListBacktests(16037541)  # Takes a project ID
+    # print(list_projects.Backtests)
+    # backtest = api.ReadBacktest(16037541, "Creative Fluorescent Orange Ant")
+    # print(backtest.BacktestId)
     if response.status_code == 200:
         # Parse the JSON response
         data = response.json()

@@ -1,9 +1,11 @@
 from AlgorithmImports import *
 from scipy import stats
 from datetime import timedelta, datetime
+from PropietaryCode.decorators import FunctionLogger
 
 class CrossSectorMRVolatilityOptionTrade(QCAlgorithm):
     def Initialize(self):
+        self.logger = FunctionLogger(self)
         self.SetStartDate(2018, 1, 1)  # Set Start Date
         self.SetEndDate(2020, 1, 1)  # Set End Date
         self.SetCash(100000)  # Set Strategy Cash
@@ -31,11 +33,13 @@ class CrossSectorMRVolatilityOptionTrade(QCAlgorithm):
 
         self.SetPortfolioConstruction(EqualWeightingPortfolioConstructionModel())
 
+    @FunctionLogger.log
     def OnEndOfAlgorithm(self):
         endTime = self.Time  # Store the end time of the algorithm
         duration = endTime - self.startTime
         self.Log(f"Backtest simulated time duration: {duration}")
 
+    @FunctionLogger.log
     def CalculateHistoricalVolatility(self, window) -> float:
         # Calculate daily log returns
         daily_returns = [np.log(window[i].Close / window[i + 1].Close) for i in range(window.Count - 1)]
@@ -49,6 +53,7 @@ class CrossSectorMRVolatilityOptionTrade(QCAlgorithm):
         # self.Log(f"Historical Volatility calculated: {historical_volatility}, max std_dev :{std_dev.max()}, min std_dev {std_dev.min()}") # std_dev is only one value, max==min
         return historical_volatility
 
+    @FunctionLogger.log
     def CalculatePercentile(self, iv_window, current_iv):
         if not iv_window.IsReady:
             self.Log("IV rolling window is not ready.")
@@ -63,6 +68,7 @@ class CrossSectorMRVolatilityOptionTrade(QCAlgorithm):
         # self.Log(f"Implied Volatility Percentile calculated: {round(percentile, 4)}; IV List: {iv_list}; Current IV: {round(current_iv, 4)}")
         return percentile
 
+    @FunctionLogger.log
     def UniverseOptionFilter(self, universe: OptionFilterUniverse):
         return universe.IncludeWeeklys()\
                        .Strikes(self.max_down_strikes, self.max_up_strikes)\
@@ -132,6 +138,7 @@ class CrossSectorMRVolatilityOptionTrade(QCAlgorithm):
         # if not self.Portfolio.Invested:
         #     self.Log('OnData executing not invested') ### Too much LOGGING
 
+    @FunctionLogger.log
     def BuyCall(self, chains):
         """Method to execute to open a long position on a call option chain"""
         expiry = sorted(chains, key=lambda x: x.Expiry, reverse=True)[0].Expiry
@@ -147,6 +154,8 @@ class CrossSectorMRVolatilityOptionTrade(QCAlgorithm):
         # self.EmitInsights(Insight.Price(self.call.Symbol, timedelta(40), InsightDirection.Up))
         self.Buy(self.call.Symbol, quantity).UpdateTag("Open Long Call Position")
 
+
+    @FunctionLogger.log
     def SellCall(self, chains):
         """Method to execute to open a short position on a call option chain"""
         expiry = sorted(chains, key=lambda x: x.Expiry, reverse=False)[0].Expiry

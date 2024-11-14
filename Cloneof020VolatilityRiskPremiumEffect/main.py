@@ -4,11 +4,13 @@
 # out-of-the-money puts are bought (at the ask price) as insurance against a market crash. The remaining cash and received option premium are
 # invested in the index. The strategy is rebalanced monthly.
 
+from PropietaryCode.decorators import FunctionLogger
 from AlgorithmImports import *
 
 class VolatilityRiskPremiumEffect(QCAlgorithm):
 
     def Initialize(self):
+        self.logger = FunctionLogger(self)
         self.SetStartDate(2000, 1, 1)
         self.SetCash(10000)
         
