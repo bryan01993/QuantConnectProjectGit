@@ -1,15 +1,34 @@
+defaults: &defaults
+  START_DATE: "2023-01-01"
+  END_DATE: "2024-01-01"
+
 ALGOS:
-  - ALGO_CODE : 1
-    ALGO_NAME : "StatisticalArbitrageOptionsPair"
-    ALGO_MAYUS_LETTERS : "SAOP"
-    ALGO_PUBLIC_NAME : "BarackObama"
-    ALGO_VERSION : 1
-    ALGO_PARAMETRY :
-      - ALGO_PARAM_1 :
-        ALGO_PARAM_1_DEFAULT : 15
-        ALGO_PARAM_1_MIN : 10
-        ALGO_PARAM_1_MAX: 20
-        ALGO_PARAM_1_STEP: 5
-      - ALGO_PARAM_2 : "full"
-    ALGO_SHORT_NAME : "1SAOP"
-    
+  - <<: *defaults
+    ALGO_CODE: 1
+    ALGO_NAME: "StatisticalArbitrageOptionsPair"
+    ALGO_MAYUS_LETTERS: "SAOP"
+    ALGO_PUBLIC_NAME: "BarackObama"
+    ALGO_VERSION: 1
+    ALGO_PARAMETRY:
+      - ALGO_PARAM_1:
+          ALGO_PARAM_1_DEFAULT: 15
+          ALGO_PARAM_1_MIN: 10
+          ALGO_PARAM_1_MAX: 20
+          ALGO_PARAM_1_STEP: 5
+      - ALGO_PARAM_2: "full"
+    ALGO_SHORT_NAME: "1SAOP"
+
+  - <<: *defaults
+    ALGO_CODE: 2
+    ALGO_NAME: "BuyAndHoldOptions"
+    ALGO_MAYUS_LETTERS: "BAHO"
+    ALGO_PUBLIC_NAME: "DonaldTrump"
+    ALGO_VERSION: 1
+    ALGO_PARAMETRY:
+      - ALGO_PARAM_1:
+          ALGO_PARAM_1_DEFAULT: 15
+          ALGO_PARAM_1_MIN: 10
+          ALGO_PARAM_1_MAX: 20
+          ALGO_PARAM_1_STEP: 5
+      - ALGO_PARAM_2: "full"
+    ALGO_SHORT_NAME: "2BAHO"

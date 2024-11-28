@@ -18,7 +18,8 @@ def main():
 
     # Resolve absolute path for Resources directory relative to the script's location
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    resources_path = os.path.join(script_dir, "..", "Resources")
+    project_root = os.path.abspath(os.path.join(script_dir, ".."))
+    resources_path = os.path.join(project_root, "Resources")
     logging.debug(f"Resolved Resources path: {resources_path}")
 
     # Check if Resources directory exists
@@ -39,6 +40,9 @@ def main():
 
     # Extract parsed data into variables for easier access
     cmd_vars = extract_parsed_data(parsed_data)
+
+    # Push project to cloud before executing the backtest
+    push_project_to_cloud(cmd_vars)
 
     # Placeholder for formatting backtesting command
     command_string = format_command(cmd_vars)
@@ -109,6 +113,8 @@ def extract_parsed_data(parsed_data):
     cmd_algo_version = parsed_data.get("ALGO_VERSION")
     cmd_algo_short_name = parsed_data.get("ALGO_SHORT_NAME")
     cmd_algo_parametry = parsed_data.get("ALGO_PARAMETRY")
+    cmd_algo_start_date = parsed_data.get("START_DATE")
+    cmd_algo_end_date = parsed_data.get("END_DATE")
     return {
         "cmd_algo_code": cmd_algo_code,
         "cmd_algo_name": cmd_algo_name,
@@ -117,7 +123,9 @@ def extract_parsed_data(parsed_data):
         "cmd_algo_public_name": cmd_algo_public_name,
         "cmd_algo_version": cmd_algo_version,
         "cmd_algo_short_name": cmd_algo_short_name,
-        "cmd_algo_parametry": cmd_algo_parametry
+        "cmd_algo_parametry": cmd_algo_parametry,
+        "cmd_algo_start_date": cmd_algo_start_date,
+        "cmd_algo_end_date": cmd_algo_end_date
     }
 
 
@@ -125,10 +133,25 @@ def extract_parsed_data(parsed_data):
 def format_command(cmd_vars):
     # Generate sequential identifier for backtest
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    backtest_id = f"V{cmd_vars['cmd_algo_version']}_{cmd_vars['cmd_algo_proyect']}_{timestamp}"
+    backtest_id = f"V{cmd_vars['cmd_algo_version']}_{cmd_vars['cmd_algo_proyect']}_{cmd_vars['cmd_algo_start_date']}_{cmd_vars['cmd_algo_end_date']}"
     # Format the command used for cloud backtesting based on cmd_vars
     command = f"lean cloud backtest {cmd_vars['cmd_algo_proyect']} --name {backtest_id}"
+    print(f"{command}")
     return command
+
+
+# Define function to push the project to the cloud
+def push_project_to_cloud(cmd_vars):
+    # Construct the correct project path based on the project root and the algorithm's name
+    project_folder_name = f"{cmd_vars['cmd_algo_code']}_{cmd_vars['cmd_algo_name']}"
+
+    # Format the command to push the project to cloud using only the folder name
+    push_command = f"lean cloud push --project {project_folder_name}"
+    try:
+        logging.info(f"Pushing project to cloud: {cmd_vars['cmd_algo_name']}")
+        subprocess.run(push_command, shell=True, check=True, cwd="../")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to push project to cloud with error: {e}")
 
 
 # Define function to run the command in the terminal
