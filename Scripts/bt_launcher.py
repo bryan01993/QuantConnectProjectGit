@@ -133,7 +133,7 @@ def extract_parsed_data(parsed_data):
 def format_command(cmd_vars):
     # Generate sequential identifier for backtest
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    backtest_id = f"V{cmd_vars['cmd_algo_version']}_{cmd_vars['cmd_algo_proyect']}_{cmd_vars['cmd_algo_start_date']}_{cmd_vars['cmd_algo_end_date']}"
+    backtest_id = f"BT_{cmd_vars['cmd_algo_proyect']}_{cmd_vars['cmd_algo_start_date']}_{cmd_vars['cmd_algo_end_date']}_V{cmd_vars['cmd_algo_version']}_{timestamp}"
     # Format the command used for cloud backtesting based on cmd_vars
     command = f"lean cloud backtest {cmd_vars['cmd_algo_proyect']} --name {backtest_id}"
     print(f"{command}")
