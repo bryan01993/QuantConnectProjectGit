@@ -17,7 +17,7 @@ class QuantConnectDBHandler:
         # Create BTOPResults table
         self.cursor.execute("""
         CREATE TABLE IF NOT EXISTS BTOPResults (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id TEXT PRIMARY KEY,
             strategy_name TEXT,
             backtest_date TEXT,
             cumulative_return REAL,
@@ -29,12 +29,14 @@ class QuantConnectDBHandler:
         self.cursor.execute("""
         CREATE TABLE IF NOT EXISTS BTOPOrders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            btop_result_id TEXT,
             order_id TEXT,
             strategy_name TEXT,
             order_type TEXT,
             quantity INTEGER,
             price REAL,
-            timestamp TEXT
+            timestamp TEXT,
+            FOREIGN KEY (btop_result_id) REFERENCES BTOPResults (id)
         )
         """)
 
@@ -52,12 +54,12 @@ class QuantConnectDBHandler:
         """Insert multiple rows of backtest results into the BTOPResults table.
 
         Args:
-            results (list of tuple): List of tuples containing strategy_name, backtest_date,
+            results (list of tuple): List of tuples containing id, strategy_name, backtest_date,
                                     cumulative_return, and sharpe_ratio.
         """
         self.cursor.executemany("""
-        INSERT INTO BTOPResults (strategy_name, backtest_date, cumulative_return, sharpe_ratio)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO BTOPResults (id, strategy_name, backtest_date, cumulative_return, sharpe_ratio)
+        VALUES (?, ?, ?, ?, ?)
         """, results)
         self.conn.commit()
 
@@ -65,12 +67,12 @@ class QuantConnectDBHandler:
         """Insert multiple rows of order data into the BTOPOrders table.
 
         Args:
-            orders (list of tuple): List of tuples containing order_id, strategy_name,
+            orders (list of tuple): List of tuples containing btop_result_id, order_id, strategy_name,
                                     order_type, quantity, price, and timestamp.
         """
         self.cursor.executemany("""
-        INSERT INTO BTOPOrders (order_id, strategy_name, order_type, quantity, price, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO BTOPOrders (btop_result_id, order_id, strategy_name, order_type, quantity, price, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """, orders)
         self.conn.commit()
 
@@ -99,5 +101,4 @@ class QuantConnectDBHandler:
 
 # Make the class callable from other scripts
 if __name__ == "__main__":
-    QuantConnectDBHandler()
     print("This module is meant to be imported and used by other scripts.")
