@@ -38,7 +38,7 @@ def main():
 # Define function to parse command-line arguments
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Backtest Handler for Downloading Results and Storing in Database")
-    parser.add_argument("backtest_id", type=str, nargs="?", default="04cee94468156ad207fc43329f697139", help="ID of the backtest to handle")
+    parser.add_argument("backtest_id", type=str, nargs="?", default="e0f96f651d79bc4463c2c255bcae4e00", help="ID of the backtest to handle")
     return parser.parse_args()
 
 # Define function to retrieve API key and user ID from UserConfig.yaml
@@ -93,7 +93,7 @@ def download_backtest_results(backtest_id, api_token):
         results_path = os.path.join(results_dir, f"{backtest_id}.json")
 
         # Define the API endpoint and headers
-        api_url = f"https://www.quantconnect.com/api/v2/backtests/{backtest_id}/statistics"
+        api_url = "https://www.quantconnect.com/api/v2/backtests/read"
         headers = {
             "Authorization": f"Basic {api_token['api_token']}",
             "Timestamp": api_token['timestamp']
@@ -104,7 +104,11 @@ def download_backtest_results(backtest_id, api_token):
 
         # Make the API request
         logging.info(f"Fetching results for backtest ID: {backtest_id} from QuantConnect API.")
-        response = requests.get(api_url, headers=headers)
+        payload = {
+            "projectId": 0,  # Replace with the actual project ID
+            "backtestId": backtest_id
+        }
+        response = requests.post(api_url, headers=headers, json=payload)
         response.raise_for_status()
 
         # Parse the JSON response
