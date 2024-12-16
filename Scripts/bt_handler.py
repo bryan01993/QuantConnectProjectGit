@@ -88,7 +88,9 @@ def generate_api_token(api_key, user_id):
 # Define function to download backtest results via QuantConnect API
 def download_backtest_results(backtest_id, api_token):
     try:
-        results_dir = "backtest_results"
+        # Resolve results directory relative to the Scripts folder
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        results_dir = os.path.join(script_dir, "backtest_results")
         os.makedirs(results_dir, exist_ok=True)
         results_path = os.path.join(results_dir, f"{backtest_id}.json")
 

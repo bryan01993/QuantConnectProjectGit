@@ -13,6 +13,9 @@ pydevd-pycharm = "^241.14494.19"
 graphviz = "^0.20.1"
 plotly = "^5.23.0"
 pyyaml = "^6.0.2"
+google-cloud = "^0.34.0"
+google = "^3.0.0"
+google-cloud-bigquery = "^3.27.0"
 
 
 [build-system]
