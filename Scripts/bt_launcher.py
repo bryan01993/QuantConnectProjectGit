@@ -9,9 +9,6 @@ import datetime  # For timestamp formatting
 # Setup logging configuration
 logging.basicConfig(level=logging.DEBUG)
 
-
-
-
 # Define main function
 def main():
     # Parse command-line arguments

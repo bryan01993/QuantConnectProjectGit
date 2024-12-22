@@ -9,7 +9,7 @@ ALGOS:
     ALGO_NAME: "StatisticalArbitrageOptionsPair"
     ALGO_MAYUS_LETTERS: "SAOP"
     ALGO_PUBLIC_NAME: "BarackObama"
-    ALGO_VERSION: 1
+    ALGO_VERSION: 2
     ALGO_PARAMETRY:
       - ALGO_PARAM_1:
           ALGO_PARAM_1_DEFAULT: 15
