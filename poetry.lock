@@ -548,16 +548,16 @@ files = [
 google-auth = ">=2.14.1,<3.0.dev0"
 googleapis-common-protos = ">=1.56.2,<2.0.dev0"
 grpcio = [
-    {version = ">=1.49.1,<2.0dev", optional = true, markers = "python_version >= \"3.11\" and extra == \"grpc\""},
     {version = ">=1.33.2,<2.0dev", optional = true, markers = "python_version < \"3.11\" and extra == \"grpc\""},
+    {version = ">=1.49.1,<2.0dev", optional = true, markers = "python_version >= \"3.11\" and extra == \"grpc\""},
 ]
 grpcio-status = [
-    {version = ">=1.49.1,<2.0.dev0", optional = true, markers = "python_version >= \"3.11\" and extra == \"grpc\""},
     {version = ">=1.33.2,<2.0.dev0", optional = true, markers = "python_version < \"3.11\" and extra == \"grpc\""},
+    {version = ">=1.49.1,<2.0.dev0", optional = true, markers = "python_version >= \"3.11\" and extra == \"grpc\""},
 ]
 proto-plus = [
-    {version = ">=1.25.0,<2.0.0dev", markers = "python_version >= \"3.13\""},
     {version = ">=1.22.3,<2.0.0dev", markers = "python_version < \"3.13\""},
+    {version = ">=1.25.0,<2.0.0dev", markers = "python_version >= \"3.13\""},
 ]
 protobuf = ">=3.19.5,<3.20.0 || >3.20.0,<3.20.1 || >3.20.1,<4.21.0 || >4.21.0,<4.21.1 || >4.21.1,<4.21.2 || >4.21.2,<4.21.3 || >4.21.3,<4.21.4 || >4.21.4,<4.21.5 || >4.21.5,<6.0.0.dev0"
 requests = ">=2.18.0,<3.0.0.dev0"
@@ -989,13 +989,13 @@ files = [
 
 [[package]]
 name = "lean"
-version = "1.0.211"
+version = "1.0.213"
 description = "A CLI aimed at making it easier to run QuantConnect's LEAN engine locally and in the cloud"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "lean-1.0.211-py3-none-any.whl", hash = "sha256:61bf6418f5ba2fa6dfe92121598022ee08bd8684144a160441c8abed9ed411e9"},
-    {file = "lean-1.0.211.tar.gz", hash = "sha256:003dea741fd2856cd151c60b2dff54ca984cd1a59b9a5e86d836f9fcdb60c55a"},
+    {file = "lean-1.0.213-py3-none-any.whl", hash = "sha256:2f047ee7edc790c0f34898932a738f90274d6fda3c9f89ed5eb23a3999cda04d"},
+    {file = "lean-1.0.213.tar.gz", hash = "sha256:8f46b8cc98ea670af4d8aff05d43ce160086a64e958c0c181655f85155b94c80"},
 ]
 
 [package.dependencies]
@@ -1008,7 +1008,7 @@ lxml = ">=4.9.0"
 maskpass = ">=0.3.6"
 pydantic = ">=1.8.2"
 python-dateutil = ">=2.8.2"
-quantconnect-stubs = ">=16809"
+quantconnect-stubs = ">=16832"
 requests = ">=2.27.1"
 rich = ">=9.10.0"
 setuptools = "*"
@@ -1408,9 +1408,9 @@ files = [
 
 [package.dependencies]
 numpy = [
-    {version = ">=1.26.0", markers = "python_version >= \"3.12\""},
-    {version = ">=1.23.2", markers = "python_version == \"3.11\""},
     {version = ">=1.22.4", markers = "python_version < \"3.11\""},
+    {version = ">=1.23.2", markers = "python_version == \"3.11\""},
+    {version = ">=1.26.0", markers = "python_version >= \"3.12\""},
 ]
 python-dateutil = ">=2.8.2"
 pytz = ">=2020.1"
@@ -2063,13 +2063,13 @@ files = [
 
 [[package]]
 name = "quantconnect-stubs"
-version = "16811"
+version = "16832"
 description = "Type stubs for QuantConnect's Lean"
 optional = false
 python-versions = "*"
 files = [
-    {file = "quantconnect_stubs-16811-py3-none-any.whl", hash = "sha256:e8ad2a607858c59c90024c4f2962a6f830a6bbe77d8e1d99dd679922c5cbb0ec"},
-    {file = "quantconnect_stubs-16811.tar.gz", hash = "sha256:c216e8300d5bc5d397a4f1b7afce282245f8d7e76b53535283a9c7c7101c1a72"},
+    {file = "quantconnect_stubs-16832-py3-none-any.whl", hash = "sha256:c3d68217bd23c71ea2cc0f64320e4086707effae9cc47f4c8343b95b4ed62905"},
+    {file = "quantconnect_stubs-16832.tar.gz", hash = "sha256:029b39f550e998f278fc6e03feb3f388495dc7c4658503126830cea047ef3b58"},
 ]
 
 [package.dependencies]
