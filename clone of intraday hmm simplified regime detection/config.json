@@ -1,0 +1,12 @@
+{
+    "algorithm-language": "Python",
+    "parameters": {
+        "roc_window": "150",
+        "bar_size": "5"
+    },
+    "description": "",
+    "cloud-id": 19486850,
+    "organization-id": "6bfd78b1c53c2e682ab8f3635d854f13",
+    "python-venv": 1,
+    "encrypted": false
+}

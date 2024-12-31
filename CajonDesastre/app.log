@@ -1,0 +1,19 @@
+2024-07-28 18:02:08,878 - __main__ - INFO - Calling function: add with args: (2, 3) and kwargs: {}
+2024-07-28 18:02:08,878 - __main__ - INFO - Function: add returned: 5
+2024-07-28 18:02:08,878 - __main__ - INFO - Calling function: multiply with args: (4, 5) and kwargs: {}
+2024-07-28 18:02:08,878 - __main__ - INFO - Function: multiply returned: 20
+2024-07-28 18:07:17,466 - __main__ - INFO - Calling function: 1-add with args: (2, 3) and kwargs: {}
+2024-07-28 18:07:17,466 - __main__ - INFO - Function: add returned: 5
+2024-07-28 18:07:17,466 - __main__ - INFO - Calling function: 2-multiply with args: (4, 5) and kwargs: {}
+2024-07-28 18:07:17,466 - __main__ - INFO - Function: multiply returned: 20
+2024-07-28 18:07:17,466 - __main__ - INFO - Calling function: 1-add with args: (5, 7) and kwargs: {}
+2024-07-28 18:07:17,466 - __main__ - INFO - Function: add returned: 12
+2024-07-28 21:11:07,350 - __main__ - INFO - Calling function: 1-add with args: (2, 3) and kwargs: {}
+2024-07-28 21:11:07,351 - __main__ - INFO - Function: add returned: 5
+2024-07-28 21:11:07,351 - __main__ - INFO - Calling function: 2-multiply with args: (4, 5) and kwargs: {}
+2024-07-28 21:11:07,351 - __main__ - INFO - Function: multiply returned: 20
+2024-07-28 21:11:07,351 - __main__ - INFO - Calling function: 1-add with args: (5, 7) and kwargs: {}
+2024-07-28 21:11:07,351 - __main__ - INFO - Function: add returned: 12
+2024-07-28 21:12:05,910 - __main__ - INFO - Calling function: 1-add | Execution time: 0.00000s | Args: [('a', 'str', 'N/A'), ('b', 'str', 'N/A')]
+2024-07-28 21:12:05,910 - __main__ - INFO - Calling function: 2-multiply | Execution time: 0.00000s | Args: [('a', 'str', 'N/A'), ('b', 'str', 'N/A')]
+2024-07-28 21:12:05,910 - __main__ - INFO - Calling function: 1-add | Execution time: 0.00000s | Args: [('a', 'str', 'N/A'), ('b', 'str', 'N/A')]
