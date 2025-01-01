@@ -16,6 +16,7 @@ pyyaml = "^6.0.2"
 google-cloud = "^0.34.0"
 google = "^3.0.0"
 google-cloud-bigquery = "^3.27.0"
+notebook = "^7.3.2"
 
 
 [build-system]
