@@ -5,6 +5,17 @@ defaults: &defaults
 
 ALGOS:
   - <<: *defaults
+    ALGO_CODE: 0
+    ALGO_NAME: "AlgoTester"
+    ALGO_MAYUS_LETTERS: "AT"
+    ALGO_PUBLIC_NAME: "GeorgeWashington"
+    ALGO_VERSION: 1
+    ALGO_PARAMETRY:
+      - ALGO_PARAM_1: 0
+      - ALGO_PARAM_2: "full"
+    ALGO_SHORT_NAME: "0AT"
+
+  - <<: *defaults
     ALGO_CODE: 1
     ALGO_NAME: "StatisticalArbitrageOptionsPair"
     ALGO_MAYUS_LETTERS: "SAOP"

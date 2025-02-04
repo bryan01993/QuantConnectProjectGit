@@ -13,7 +13,6 @@ class StatisticalArbitrageOptionsPair(QCAlgorithm):
 
         self.Log("Initializing the strategy...")
 
-        ## self.sector = "Technology"  # Example: Selectable sector
         self.symbols = self.SelectSectorSymbols(self.GetParameter("sector"))
         for symbol in self.symbols:
             equity = self.AddEquity(symbol, Resolution.Daily)
@@ -22,7 +21,6 @@ class StatisticalArbitrageOptionsPair(QCAlgorithm):
 
         self.SetBenchmark("SPY")
 
-        # Framework models
         self.SetUniverseSelection(ManualUniverseSelectionModel(self.symbols))
         self.SetAlpha(VolatilityDifferenceAlphaModel())
         self.SetPortfolioConstruction(EqualWeightingPortfolioConstructionModel())
@@ -32,7 +30,6 @@ class StatisticalArbitrageOptionsPair(QCAlgorithm):
         self.Debug(f"Selected symbols: {self.symbols}")
 
     def SelectSectorSymbols(self, sector):
-        # Example implementation: Select symbols based on sector
         sector_map = {
             "Technology": ["AAPL", "MSFT", "GOOG"],
             "Finance": ["JPM", "BAC", "GS"],
@@ -55,39 +52,42 @@ class VolatilityDifferenceAlphaModel(AlphaModel):
             realized_vol = self.CalculateRealizedVolatility(symbol, algorithm)
             implied_vol = self.GetImpliedVolatility(symbol, algorithm)
 
-            algorithm.Debug(f"Symbol: {symbol}, Realized Vol: {realized_vol}, Implied Vol: {implied_vol}")
+            algorithm.Log(f"Symbol: {symbol}, Realized Vol: {realized_vol}, Implied Vol: {implied_vol}")
 
-            if implied_vol - realized_vol > self.threshold:
+            if implied_vol > 0 and realized_vol > 0 and (implied_vol - realized_vol > self.threshold):
                 insights.append(Insight.Price(symbol, timedelta(days=30), InsightDirection.Flat))
-                algorithm.Debug(f"Generated insight for symbol {symbol}")
+                algorithm.Log(f"Generated insight for symbol {symbol}")
 
         return insights
 
     def OnSecuritiesChanged(self, algorithm, changes):
         for security in changes.AddedSecurities:
             self.volatility_data[security.Symbol] = RollingWindow[float](self.lookback)
-            algorithm.Debug(f"Added security: {security.Symbol}")
+            algorithm.Log(f"Added security: {security.Symbol}")
         for security in changes.RemovedSecurities:
             self.volatility_data.pop(security.Symbol, None)
-            algorithm.Debug(f"Removed security: {security.Symbol}")
+            algorithm.Log(f"Removed security: {security.Symbol}")
 
     def CalculateRealizedVolatility(self, symbol, algorithm):
         history = algorithm.History(symbol, self.lookback, Resolution.Daily)
-        if len(history) < self.lookback:
-            algorithm.Debug(f"Insufficient history for symbol {symbol}")
+        if history.empty or len(history) < self.lookback:
+            algorithm.Log(f"Insufficient history for symbol {symbol}")
             return 0
         returns = history["close"].pct_change().dropna()
         return returns.std() * (252 ** 0.5)
 
     def GetImpliedVolatility(self, symbol, algorithm):
-        option_chains = getattr(algorithm, "OptionChains", None)
-        if not option_chains or symbol not in algorithm.OptionChain(symbol):
-            algorithm.Debug(f"No option chain available for symbol {symbol}")
+        option_chains = getattr(algorithm, 'OptionChains', None)
+        if not option_chains or symbol not in option_chains:
+            algorithm.Log(f"No option chain available for symbol {symbol}")
             return 0
         option_chain = option_chains[symbol]
+        if not option_chain:
+            algorithm.Log(f"Empty option chain for symbol {symbol}")
+            return 0
         at_the_money = sorted(option_chain, key=lambda x: abs(x.Strike - x.UnderlyingLastPrice))[:1]
         implied_vol = sum(o.ImpliedVolatility for o in at_the_money) / len(at_the_money) if at_the_money else 0
-        algorithm.Debug(f"Symbol: {symbol}, At-the-money Implied Volatility: {implied_vol}")
+        algorithm.Log(f"Symbol: {symbol}, At-the-money Implied Volatility: {implied_vol}")
         return implied_vol
 
 class EqualWeightingPortfolioConstructionModel(PortfolioConstructionModel):
@@ -96,7 +96,7 @@ class EqualWeightingPortfolioConstructionModel(PortfolioConstructionModel):
         for insight in insights:
             if insight.Direction == InsightDirection.Flat:
                 targets.append(PortfolioTarget.Percent(algorithm.Portfolio[insight.Symbol].Symbol, 0.02))
-                algorithm.Debug(f"Creating target for symbol {insight.Symbol}")
+                algorithm.Log(f"Creating target for symbol {insight.Symbol}")
         return targets
 
 class ImmediateExecutionModel(ExecutionModel):
@@ -104,5 +104,5 @@ class ImmediateExecutionModel(ExecutionModel):
         for target in targets:
             symbol = target.Symbol
             if symbol.SecurityType == SecurityType.Option:
-                algorithm.Debug(f"Executing market order for symbol {symbol} with quantity {target.Quantity}")
+                algorithm.Log(f"Executing market order for symbol {symbol} with quantity {target.Quantity}")
                 algorithm.MarketOrder(symbol, target.Quantity)
