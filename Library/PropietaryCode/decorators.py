@@ -1,76 +1,46 @@
-# from QuantConnect.Algorithm import QCAlgorithm
 import time
-import inspect
+import tracemalloc
+from functools import wraps
+
+execution_order = 0  # Global counter for function order
 
 
-class FunctionLogger:
+def monitor_execution(func):
     """
-    A class to log function execution details in QuantConnect algorithms.
-    It logs the order of execution, function name, start time, parameters, duration,
-    and raises any exceptions if occurred.
-
-    This class is callable as a decorator and logs using QuantConnect's native logging system.
+    Decorator to log execution time, arguments, return values, and memory usage of selected functions
+    using QuantConnect's .Log() method. Also maintains nominal execution order.
     """
-    order = 0  # Nominal order of execution
 
-    def __init__(self, qc_algorithm_instance):
-        """
-        Initialize the FunctionLogger with an instance of the QCAlgorithm class.
-        :param qc_algorithm_instance: Instance of QCAlgorithm (or inherited class)
-        """
-        self.qc = qc_algorithm_instance
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        global execution_order
+        execution_order += 1
+        start_time = time.time()
+        tracemalloc.start()  # Start memory tracking
 
-    def log(self, func):
-        """
-        Method to act as the decorator itself. It logs information about the decorated function's execution.
+        result = func(self, *args, **kwargs)  # Execute the function
 
-        :param func: The function being decorated
-        """
+        end_time = time.time()
+        current, peak = tracemalloc.get_traced_memory()  # Get memory usage
+        tracemalloc.stop()
+        execution_time = end_time - start_time
 
-        def wrapper(*args, **kwargs):
-            start_time = time.time()
-            FunctionLogger.order += 1  # Increment the order of execution
-            func_name = func.__name__
+        # Ensure self has Log method (it should be an instance of QCAlgorithm)
+        if hasattr(self, "Log"):
+            log_entry = {
+                "execution_order": execution_order,
+                "function": func.__name__,
+                "execution_time": f"{execution_time:.6f} sec",
+                "memory_usage": f"{current / 1024:.2f} KB",
+                "peak_memory": f"{peak / 1024:.2f} KB",
+                "args": args,
+                "kwargs": kwargs,
+                "result": result
+            }
+            self.Log(str(log_entry))
+        else:
+            raise TypeError(f"{self} does not have a 'Log' method. Ensure this is used inside a QCAlgorithm class.")
 
-            # Log function arguments with their types --> Commented out for clarity and brevity
-            # signature = inspect.signature(func)
-            # bound_args = signature.bind(*args, **kwargs)
-            # bound_args.apply_defaults()
-            # arg_info = {k: (v, type(v).__name__) for k, v in bound_args.arguments.items()}
+        return result
 
-            try:
-                result = func(*args, **kwargs)
-                duration = round(time.time() - start_time, 4)  # Duration in seconds
-
-                # Access QCAlgorithm's Debug method
-                self.qc.Debug(f"ALGO_ORDER: {FunctionLogger.order}, "
-                              f"FUNCTION_ID: {id(func)}, "
-                              f"FUNCTION_NAME: {func_name}, "
-                              # f"PARAMETERS: {arg_info}, "
-                              f"DURATION: {duration}s")
-
-                return result
-
-            except Exception as e:
-                # Access QCAlgorithm's Error method and re-raise the exception
-                self.qc.Error(f"Exception in {func_name}: {str(e)}")
-                raise e
-
-        return wrapper
-
-
-# Example usage within a QuantConnect Algorithm
-# class MyAlgorithm(QCAlgorithm):
-#     def Initialize(self):
-#         self.SetStartDate(2022, 1, 1)
-#         self.SetEndDate(2022, 12, 31)
-#         self.SetCash(100000)
-#
-#         # Instantiate FunctionLogger with the algorithm instance
-#         self.function_logger = FunctionLogger(self)
-#
-#     @FunctionLogger.log
-#     def OnData(self, data):
-#         # Example function that will be logged
-#         self.Debug("Processing new data...")
-#         pass
+    return wrapper
