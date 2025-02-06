@@ -1,15 +1,42 @@
 import json
 import os
+import time
 from google.cloud import bigquery
+
+# If you run into cross-partition or cross-filesystem issues with os.rename, consider using shutil.move.
+import shutil
+
+def insert_rows_with_logging(client, table_id, rows_to_insert):
+    """
+    Inserts rows into the given BigQuery table and logs any errors.
+
+    Args:
+        client (bigquery.Client): The BigQuery client.
+        table_id (str): The full table ID ("dataset.table").
+        rows_to_insert (List[Dict]): The rows to insert.
+    """
+    errors = client.insert_rows_json(table_id, rows_to_insert)
+    if errors:
+        print(f"Errors inserting into {table_id}: {errors}")
+    else:
+        print(f"Successfully inserted rows into {table_id}")
+
 
 def load_json_to_bigquery(json_file_path, dataset_id):
     """
     Load a backtest JSON file into respective BigQuery tables.
 
+    If the file's backtestId is already in BigQuery, skip upload and move the file
+    to the already_uploaded_backtest_results folder. If the file already exists
+    at the destination, rename the new file by appending a timestamp.
+
     Args:
         json_file_path (str): Path to the JSON file.
         dataset_id (str): BigQuery dataset ID where the tables are located.
     """
+    # Derive the script's absolute directory path
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+
     client = bigquery.Client(project='bav-personal-cloud')
 
     # Check if the file has already been uploaded
@@ -25,8 +52,22 @@ def load_json_to_bigquery(json_file_path, dataset_id):
     results = query_job.result()
     count = [row.count for row in results][0]
 
+    # Construct the folder for already-uploaded files
+    already_uploaded_dir = os.path.join(current_dir, "../Scripts/already_uploaded_backtest_results")
+    os.makedirs(already_uploaded_dir, exist_ok=True)
+    destination_file = os.path.join(already_uploaded_dir, json_file_name)
+
+    # Helper function to safely move the file (avoid collisions)
+    def safe_move(src, dst):
+        if os.path.exists(dst):
+            base, ext = os.path.splitext(dst)
+            dst = f"{base}_{int(time.time())}{ext}"
+        shutil.move(src, dst)
+        print(f"File moved to {dst}")
+
     if count > 0:
-        print(f"File {json_file_name} has already been uploaded. Skipping upload.")
+        print(f"File {json_file_name} has already been uploaded. Moving file...")
+        safe_move(json_file_path, destination_file)
         return
 
     # Load JSON file
@@ -51,6 +92,10 @@ def load_json_to_bigquery(json_file_path, dataset_id):
     print("Loading errors data...")
     load_errors(data, client, dataset_id)
     print("Data loading complete.")
+
+    # After successful insert, safely move the file
+    safe_move(json_file_path, destination_file)
+
 
 def load_backtest(data, client, dataset_id):
     table_id = f"{dataset_id}.BTOPResults"
@@ -78,7 +123,7 @@ def load_backtest(data, client, dataset_id):
     } for bt in [data.get("backtest", {})]]
 
     if rows_to_insert:
-        client.insert_rows_json(table_id, rows_to_insert)
+        insert_rows_with_logging(client, table_id, rows_to_insert)
 
 def load_research_guide(data, client, dataset_id):
     table_id = f"{dataset_id}.BTOPResearchGuide"
@@ -91,7 +136,7 @@ def load_research_guide(data, client, dataset_id):
     }] if data.get("backtest") and data["backtest"].get("researchGuide") else []
 
     if rows_to_insert:
-        client.insert_rows_json(table_id, rows_to_insert)
+        insert_rows_with_logging(client, table_id, rows_to_insert)
 
 def load_charts(data, client, dataset_id):
     table_id = f"{dataset_id}.BTOPCharts"
@@ -102,7 +147,7 @@ def load_charts(data, client, dataset_id):
     } for chart_key, chart_data in data["backtest"].get("charts", {}).items()]
 
     if rows_to_insert:
-        client.insert_rows_json(table_id, rows_to_insert)
+        insert_rows_with_logging(client, table_id, rows_to_insert)
 
 def load_parameter_set(data, client, dataset_id):
     table_id = f"{dataset_id}.BTOPParameterSet"
@@ -114,7 +159,7 @@ def load_parameter_set(data, client, dataset_id):
     } for param in data["backtest"].get("parameterSet", [])]
 
     if rows_to_insert:
-        client.insert_rows_json(table_id, rows_to_insert)
+        insert_rows_with_logging(client, table_id, rows_to_insert)
 
 def load_rolling_window_stats(data, client, dataset_id):
     trade_table_id = f"{dataset_id}.BTOPRollingWindowTradeStats"
@@ -139,10 +184,10 @@ def load_rolling_window_stats(data, client, dataset_id):
         }] if rolling_window.get("portfolioStatistics") else []
 
         if trade_rows:
-            client.insert_rows_json(trade_table_id, trade_rows)
+            insert_rows_with_logging(client, trade_table_id, trade_rows)
 
         if portfolio_rows:
-            client.insert_rows_json(portfolio_table_id, portfolio_rows)
+            insert_rows_with_logging(client, portfolio_table_id, portfolio_rows)
 
 def load_runtime_statistics(data, client, dataset_id):
     table_id = f"{dataset_id}.BTOPRuntimeStatistics"
@@ -152,11 +197,13 @@ def load_runtime_statistics(data, client, dataset_id):
         "runtimeStatId": f"{data['backtest'].get('backtestId')}_runtime",
         "backtestId": data["backtest"].get("backtestId"),
         "equity": runtime_stats.get("Equity"),
-        "fees": runtime_stats.get("Fees")
+        "fees": runtime_stats.get("Fees"),
+        "holdings": runtime_stats.get("Holdings"),
+        "netProfit": runtime_stats.get("Net Profit")
     }]
 
     if rows_to_insert:
-        client.insert_rows_json(table_id, rows_to_insert)
+        insert_rows_with_logging(client, table_id, rows_to_insert)
 
 def load_total_performance(data, client, dataset_id):
     trade_table_id = f"{dataset_id}.BTOPTotalPerformanceTradeStats"
@@ -179,10 +226,10 @@ def load_total_performance(data, client, dataset_id):
         }] if total_performance.get("portfolioStatistics") else []
 
         if trade_rows:
-            client.insert_rows_json(trade_table_id, trade_rows)
+            insert_rows_with_logging(client, trade_table_id, trade_rows)
 
         if portfolio_rows:
-            client.insert_rows_json(portfolio_table_id, portfolio_rows)
+            insert_rows_with_logging(client, portfolio_table_id, portfolio_rows)
 
 def load_errors(data, client, dataset_id):
     table_id = f"{dataset_id}.BTOPErrors"
@@ -194,19 +241,19 @@ def load_errors(data, client, dataset_id):
     } for i, error in enumerate(errors)]
 
     if rows_to_insert:
-        client.insert_rows_json(table_id, rows_to_insert)
+        insert_rows_with_logging(client, table_id, rows_to_insert)
 
 if __name__ == "__main__":
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    json_file = os.path.join(current_dir, "../Scripts/backtest_results/e0f96f651d79bc4463c2c255bcae4e00.json")
     dataset = "develop"
 
-    # Run the data load
-    load_json_to_bigquery(json_file, dataset)
+    backtest_results_dir = os.path.join(current_dir, "../Scripts/backtest_results")
+    # We remove the rename logic from here because it is now done inside load_json_to_bigquery
+    # when the file is already present or after successful insertion.
 
-    # Move the file after successful execution
-    destination_dir = os.path.join(current_dir, "../Scripts/already_uploaded_backtest_results")
-    os.makedirs(destination_dir, exist_ok=True)
-    destination_file = os.path.join(destination_dir, os.path.basename(json_file))
-    os.rename(json_file, destination_file)
-    print(f"File moved to {destination_file}")
+    # Iterate over all JSON files in the backtest_results directory
+    for file_name in os.listdir(backtest_results_dir):
+        if file_name.endswith(".json"):
+            json_file = os.path.join(backtest_results_dir, file_name)
+            # Run the data load, which also moves the file appropriately
+            load_json_to_bigquery(json_file, dataset)

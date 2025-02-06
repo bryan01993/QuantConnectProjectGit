@@ -1,7 +1,7 @@
 {
     "algorithm-language": "Python",
     "parameters": {},
-    "description": "",
+    "description": "Basic Algorithm for testing programatic functions on scripts and developed modules",
     "libraries": [
         {
             "name": "PropietaryCode",

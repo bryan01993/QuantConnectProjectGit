@@ -9,7 +9,7 @@ from datetime import timedelta, datetime
 class AlgoTester(QCAlgorithm):
     def Initialize(self):
         self.SetStartDate(2020, 1, 1)  # Set a fixed start date
-        self.SetEndDate(2023, 1, 1)  # Set an end date for backtesting
+        self.SetEndDate(2024, 1, 1)  # Set an end date for backtesting
         self.SetCash(10000)  # Set initial cash to $10000
 
         self.spy = self.AddEquity("SPY", Resolution.Daily).Symbol

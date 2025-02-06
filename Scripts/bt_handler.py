@@ -38,7 +38,7 @@ def main():
 # Define function to parse command-line arguments
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Backtest Handler for Downloading Results and Storing in Database")
-    parser.add_argument("backtest_id", type=str, nargs="?", default="ecd97838a0d0450281cd712c6814ddad", help="ID of the backtest to handle")
+    parser.add_argument("backtest_id", type=str, nargs="?", default="0cb0c5993da6a9c89e72f718e610cdef", help="ID of the backtest to handle")
     return parser.parse_args()
 
 # Define function to retrieve API key and user ID from UserConfig.yaml
