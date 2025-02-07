@@ -208,28 +208,130 @@ def load_runtime_statistics(data, client, dataset_id):
 def load_total_performance(data, client, dataset_id):
     trade_table_id = f"{dataset_id}.BTOPTotalPerformanceTradeStats"
     portfolio_table_id = f"{dataset_id}.BTOPTotalPerformancePortfolioStats"
+    closed_trades_table_id = f"{dataset_id}.BTOPTotalPerformanceClosedTrades"
 
     total_performance = data["backtest"].get("totalPerformance")
     if total_performance:
         trade_rows = [{
             "tradeStatId": f"{data['backtest'].get('backtestId')}_tp_trade",
             "backtestId": data["backtest"].get("backtestId"),
+            "startDateTime": total_performance["tradeStatistics"].get("startDateTime"),
+            "endDateTime": total_performance["tradeStatistics"].get("endDateTime"),
             "totalNumberOfTrades": total_performance["tradeStatistics"].get("totalNumberOfTrades"),
-            "totalProfitLoss": total_performance["tradeStatistics"].get("totalProfitLoss")
+            "numberOfWinningTrades": total_performance["tradeStatistics"].get("numberOfWinningTrades"),
+            "numberOfLosingTrades": total_performance["tradeStatistics"].get("numberOfLosingTrades"),
+            "totalProfitLoss": total_performance["tradeStatistics"].get("totalProfitLoss"),
+            "totalProfit": total_performance["tradeStatistics"].get("totalProfit"),
+            "totalLoss": total_performance["tradeStatistics"].get("totalLoss"),
+            "largestProfit": total_performance["tradeStatistics"].get("largestProfit"),
+            "largestLoss": total_performance["tradeStatistics"].get("largestLoss"),
+            "averageProfitLoss": total_performance["tradeStatistics"].get("averageProfitLoss"),
+            "averageProfit": total_performance["tradeStatistics"].get("averageProfit"),
+            "averageLoss": total_performance["tradeStatistics"].get("averageLoss"),
+            "averageTradeDuration": total_performance["tradeStatistics"].get("averageTradeDuration"),
+            "averageWinningTradeDuration": total_performance["tradeStatistics"].get("averageWinningTradeDuration"),
+            "averageLosingTradeDuration": total_performance["tradeStatistics"].get("averageLosingTradeDuration"),
+            "medianTradeDuration": total_performance["tradeStatistics"].get("medianTradeDuration"),
+            "medianWinningTradeDuration": total_performance["tradeStatistics"].get("medianWinningTradeDuration"),
+            "medianLosingTradeDuration": total_performance["tradeStatistics"].get("medianLosingTradeDuration"),
+            "maxConsecutiveWinningTrades": total_performance["tradeStatistics"].get("maxConsecutiveWinningTrades"),
+            "maxConsecutiveLosingTrades": total_performance["tradeStatistics"].get("maxConsecutiveLosingTrades"),
+            "profitLossRatio": total_performance["tradeStatistics"].get("profitLossRatio"),
+            "winLossRatio": total_performance["tradeStatistics"].get("winLossRatio"),
+            "winRate": total_performance["tradeStatistics"].get("winRate"),
+            "lossRate": total_performance["tradeStatistics"].get("lossRate"),
+            "averageMAE": total_performance["tradeStatistics"].get("averageMAE"),
+            "averageMFE": total_performance["tradeStatistics"].get("averageMFE"),
+            "largestMAE": total_performance["tradeStatistics"].get("largestMAE"),
+            "largestMFE": total_performance["tradeStatistics"].get("largestMFE"),
+            "maximumClosedTradeDrawdown": total_performance["tradeStatistics"].get("maximumClosedTradeDrawdown"),
+            "maximumIntraTradeDrawdown": total_performance["tradeStatistics"].get("maximumIntraTradeDrawdown"),
+            "profitLossStandardDeviation": total_performance["tradeStatistics"].get("profitLossStandardDeviation"),
+            "profitLossDownsideDeviation": total_performance["tradeStatistics"].get("profitLossDownsideDeviation"),
+            "profitFactor": total_performance["tradeStatistics"].get("profitFactor"),
+            "sharpeRatio": total_performance["tradeStatistics"].get("sharpeRatio"),
+            "sortinoRatio": total_performance["tradeStatistics"].get("sortinoRatio"),
+            "profitToMaxDrawdownRatio": total_performance["tradeStatistics"].get("profitToMaxDrawdownRatio"),
+            "maximumEndTradeDrawdown": total_performance["tradeStatistics"].get("maximumEndTradeDrawdown"),
+            "averageEndTradeDrawdown": total_performance["tradeStatistics"].get("averageEndTradeDrawdown"),
+            "maximumDrawdownDuration": total_performance["tradeStatistics"].get("maximumDrawdownDuration"),
+            "totalFees": total_performance["tradeStatistics"].get("totalFees"),
         }] if total_performance.get("tradeStatistics") else []
 
         portfolio_rows = [{
             "portfolioStatId": f"{data['backtest'].get('backtestId')}_tp_portfolio",
             "backtestId": data["backtest"].get("backtestId"),
             "averageWinRate": total_performance["portfolioStatistics"].get("averageWinRate"),
-            "profitLossRatio": total_performance["portfolioStatistics"].get("profitLossRatio")
+            "averageLossRate": total_performance["portfolioStatistics"].get("averageLossRate"),
+            "profitLossRatio": total_performance["portfolioStatistics"].get("profitLossRatio"),
+            "winRate": total_performance["portfolioStatistics"].get("winRate"),
+            "lossRate": total_performance["portfolioStatistics"].get("lossRate"),
+            "expectancy": total_performance["portfolioStatistics"].get("expectancy"),
+            "startEquity": total_performance["portfolioStatistics"].get("startEquity"),
+            "endEquity": total_performance["portfolioStatistics"].get("endEquity"),
+            "compoundingAnnualReturn": total_performance["portfolioStatistics"].get("compoundingAnnualReturn"),
+            "drawdown": total_performance["portfolioStatistics"].get("drawdown"),
+            "totalNetProfit": total_performance["portfolioStatistics"].get("totalNetProfit"),
+            "sharpeRatio": total_performance["portfolioStatistics"].get("sharpeRatio"),
+            "probabilisticSharpeRatio": total_performance["portfolioStatistics"].get("probabilisticSharpeRatio"),
+            "sortinoRatio": total_performance["portfolioStatistics"].get("sortinoRatio"),
+            "alpha": total_performance["portfolioStatistics"].get("alpha"),
+            "beta": total_performance["portfolioStatistics"].get("beta"),
+            "annualStandardDeviation": total_performance["portfolioStatistics"].get("annualStandardDeviation"),
+            "annualVariance": total_performance["portfolioStatistics"].get("annualVariance"),
+            "informationRatio": total_performance["portfolioStatistics"].get("informationRatio"),
+            "trackingError": total_performance["portfolioStatistics"].get("trackingError"),
+            "treynorRatio": total_performance["portfolioStatistics"].get("treynorRatio"),
+            "portfolioTurnover": total_performance["portfolioStatistics"].get("portfolioTurnover"),
+            "valueAtRisk99": total_performance["portfolioStatistics"].get("valueAtRisk99"),
+            "valueAtRisk95": total_performance["portfolioStatistics"].get("valueAtRisk95"),
         }] if total_performance.get("portfolioStatistics") else []
+
+        closed_trades = total_performance.get("closedTrades", [])
+        closed_trades_rows = [
+            {
+                "closedTradeId": f"{data['backtest'].get('backtestId')}_ct_{i}",
+                "backtestId": data["backtest"].get("backtestId"),
+
+                # Symbol details
+                "symbolValue": t["symbol"].get("value") if t.get("symbol") else None,
+                "symbolId": t["symbol"].get("id") if t.get("symbol") else None,
+                "symbolPermtick": t["symbol"].get("permtick") if t.get("symbol") else None,
+
+                # Underlying details (if present)
+                "underlyingValue": t["symbol"]["underlying"].get("value")
+                if t.get("symbol") and t["symbol"].get("underlying") else None,
+                "underlyingId": t["symbol"]["underlying"].get("id")
+                if t.get("symbol") and t["symbol"].get("underlying") else None,
+                "underlyingPermtick": t["symbol"]["underlying"].get("permtick")
+                if t.get("symbol") and t["symbol"].get("underlying") else None,
+
+                # Trade fields
+                "entryTime": t.get("entryTime"),
+                "entryPrice": t.get("entryPrice"),
+                "direction": t.get("direction"),
+                "quantity": t.get("quantity"),
+                "exitTime": t.get("exitTime"),
+                "exitPrice": t.get("exitPrice"),
+                "profitLoss": t.get("profitLoss"),
+                "totalFees": t.get("totalFees"),
+                "mae": t.get("mae"),
+                "mfe": t.get("mfe"),
+                "duration": t.get("duration"),
+                "endTradeDrawdown": t.get("endTradeDrawdown"),
+                "isWin": t.get("isWin")
+            }
+            for i, t in enumerate(closed_trades)
+        ]
 
         if trade_rows:
             insert_rows_with_logging(client, trade_table_id, trade_rows)
 
         if portfolio_rows:
             insert_rows_with_logging(client, portfolio_table_id, portfolio_rows)
+
+        if portfolio_rows:
+            insert_rows_with_logging(client, closed_trades_table_id, closed_trades_rows)
 
 def load_errors(data, client, dataset_id):
     table_id = f"{dataset_id}.BTOPErrors"
