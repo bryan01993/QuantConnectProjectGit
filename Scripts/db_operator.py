@@ -298,12 +298,14 @@ def load_total_performance(data, client, dataset_id):
                 "symbolId": t["symbol"].get("id") if t.get("symbol") else None,
                 "symbolPermtick": t["symbol"].get("permtick") if t.get("symbol") else None,
 
+                #TODO
+                # can't correctly upload the attributes of the underlying.
                 # Underlying details (if present)
-                "underlyingValue": t["symbol"]["underlying"].get("value")
+                "symbol.underlying.value": t["symbol"]["underlying"].get("value")
                 if t.get("symbol") and t["symbol"].get("underlying") else None,
-                "underlyingId": t["symbol"]["underlying"].get("id")
+                "symbol.underlying.id": t["symbol"]["underlying"].get("id")
                 if t.get("symbol") and t["symbol"].get("underlying") else None,
-                "underlyingPermtick": t["symbol"]["underlying"].get("permtick")
+                "symbol.underlying.permtick": t["symbol"]["underlying"].get("permtick")
                 if t.get("symbol") and t["symbol"].get("underlying") else None,
 
                 # Trade fields
@@ -355,6 +357,7 @@ if __name__ == "__main__":
 
     # Iterate over all JSON files in the backtest_results directory
     for file_name in os.listdir(backtest_results_dir):
+        time.sleep(1)
         if file_name.endswith(".json"):
             json_file = os.path.join(backtest_results_dir, file_name)
             # Run the data load, which also moves the file appropriately
