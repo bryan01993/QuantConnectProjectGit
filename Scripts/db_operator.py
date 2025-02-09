@@ -65,10 +65,10 @@ def load_json_to_bigquery(json_file_path, dataset_id):
         shutil.move(src, dst)
         print(f"File moved to {dst}")
 
-    if count > 0:
-        print(f"File {json_file_name} has already been uploaded. Moving file...")
-        safe_move(json_file_path, destination_file)
-        return
+    # if count > 0:
+    #     print(f"File {json_file_name} has already been uploaded. Moving file...")
+    #     safe_move(json_file_path, destination_file)
+    #     return
 
     # Load JSON file
     with open(json_file_path, 'r') as f:
@@ -151,12 +151,29 @@ def load_charts(data, client, dataset_id):
 
 def load_parameter_set(data, client, dataset_id):
     table_id = f"{dataset_id}.BTOPParameterSet"
+    param_dict = data["backtest"].get("parameterSet", {})
+
+    if not param_dict:
+        # If param_dict is empty or missing, we make 'parameters' = None
+        parameters_value = [{
+            "name": "empty",
+            "value": "empty"
+        }]
+    else:
+        # Build a list of { "name": <key>, "value": <value> } records
+        parameters_value = []
+        for key, val in param_dict.items():
+            parameters_value.append({
+                "name": key,
+                "value": str(val)  # Convert to string if your schema expects STRING
+            })
+
+    # Insert exactly one row, containing all the key/value pairs (or None if empty)
     rows_to_insert = [{
         "parameterId": f"{data['backtest'].get('backtestId')}_param",
         "backtestId": data["backtest"].get("backtestId"),
-        "name": param.get("name"),
-        "value": param.get("value")
-    } for param in data["backtest"].get("parameterSet", [])]
+        "parameters": parameters_value
+    }]
 
     if rows_to_insert:
         insert_rows_with_logging(client, table_id, rows_to_insert)
@@ -164,7 +181,8 @@ def load_parameter_set(data, client, dataset_id):
 def load_rolling_window_stats(data, client, dataset_id):
     trade_table_id = f"{dataset_id}.BTOPRollingWindowTradeStats"
     portfolio_table_id = f"{dataset_id}.BTOPRollingWindowPortfolioStats"
-
+#TODO
+    #gotta make sure rolling windows data is getting uploaded correctly.
     rolling_window = data["backtest"].get("rollingWindow")
     if rolling_window:
         trade_rows = [{
@@ -199,12 +217,51 @@ def load_runtime_statistics(data, client, dataset_id):
         "equity": runtime_stats.get("Equity"),
         "fees": runtime_stats.get("Fees"),
         "holdings": runtime_stats.get("Holdings"),
-        "netProfit": runtime_stats.get("Net Profit")
+        "netProfit": runtime_stats.get("Net Profit"),
+        "probabilisticSharpeRatio": runtime_stats.get("probabilisticSharpeRatio"),
+        "return": runtime_stats.get("return"),
+        "unrealized": runtime_stats.get("unrealized"),
+        "volume": runtime_stats.get("volume"),
     }]
 
     if rows_to_insert:
         insert_rows_with_logging(client, table_id, rows_to_insert)
 
+def load_backtest_statistics(data, client, dataset_id):
+    table_id = f"{dataset_id}.BTOPStatistics"
+    bt_stats = data["backtest"].get("statistics", {})
+
+    rows_to_insert = [{
+        "statisticId": f"{data['backtest'].get('backtestId')}_stat",
+        "backtestId": data["backtest"].get("backtestId"),
+        "totalOrders": bt_stats.get("totalOrders"),
+        "averageWin": bt_stats.get("averageWin"),
+        "averageLoss": bt_stats.get("averageLoss"),
+        "compoundingAnnualReturn": bt_stats.get("compoundingAnnualReturn"),
+        "drawdown": bt_stats.get("drawdown"),
+        "expectancy": bt_stats.get("expectancy"),
+        "startEquity": bt_stats.get("startEquity"),
+        "endEquity": bt_stats.get("endEquity"),
+        "netProfit": bt_stats.get("netProfit"),
+        "sharpeRatio": bt_stats.get("sharpeRatio"),
+        "sortinoRatio": bt_stats.get("sortinoRatio"),
+        "probabilisticSharpeRatio": bt_stats.get("probabilisticSharpeRatio"),
+        "lossRate": bt_stats.get("lossRate"),
+        "winRate": bt_stats.get("winRate"),
+        "profitLossRatio": bt_stats.get("profitLossRatio"),
+        "alpha": bt_stats.get("alpha"),
+        "beta": bt_stats.get("beta"),
+        "annualStandardDeviation": bt_stats.get("annualStandardDeviation"),
+        "annualVariance": bt_stats.get("annualVariance"),
+        "informationRatio": bt_stats.get("informationRatio"),
+        "totalFees": bt_stats.get("totalFees"),
+        "estimatedStrategyCapacity": bt_stats.get("estimatedStrategyCapacity"),
+        "lowestCapacityAsset": bt_stats.get("lowestCapacityAsset"),
+        "portfolioTurnover": bt_stats.get("portfolioTurnover"),
+    }]
+
+    if rows_to_insert:
+        insert_rows_with_logging(client, table_id, rows_to_insert)
 def load_total_performance(data, client, dataset_id):
     trade_table_id = f"{dataset_id}.BTOPTotalPerformanceTradeStats"
     portfolio_table_id = f"{dataset_id}.BTOPTotalPerformancePortfolioStats"
@@ -290,23 +347,20 @@ def load_total_performance(data, client, dataset_id):
         closed_trades = total_performance.get("closedTrades", [])
         closed_trades_rows = [
             {
-                "closedTradeId": f"{data['backtest'].get('backtestId')}_ct_{i}",
+                "tradeId": f"{data['backtest'].get('backtestId')}_ct_{i}",
                 "backtestId": data["backtest"].get("backtestId"),
 
                 # Symbol details
-                "symbolValue": t["symbol"].get("value") if t.get("symbol") else None,
-                "symbolId": t["symbol"].get("id") if t.get("symbol") else None,
-                "symbolPermtick": t["symbol"].get("permtick") if t.get("symbol") else None,
-
-                #TODO
-                # can't correctly upload the attributes of the underlying.
-                # Underlying details (if present)
-                "symbol.underlying.value": t["symbol"]["underlying"].get("value")
-                if t.get("symbol") and t["symbol"].get("underlying") else None,
-                "symbol.underlying.id": t["symbol"]["underlying"].get("id")
-                if t.get("symbol") and t["symbol"].get("underlying") else None,
-                "symbol.underlying.permtick": t["symbol"]["underlying"].get("permtick")
-                if t.get("symbol") and t["symbol"].get("underlying") else None,
+                "symbol": {
+                    "value": t["symbol"].get("value") if t.get("symbol") else None,
+                    "id": t["symbol"].get("id") if t.get("symbol") else None,
+                    "permtick": t["symbol"].get("permtick") if t.get("symbol") else None,
+                    "underlying": {
+                        "value": t["symbol"]["underlying"].get("value") if t.get("symbol") and t["symbol"].get("underlying") else None,
+                        "id": t["symbol"]["underlying"].get("id") if t.get("symbol") and t["symbol"].get("underlying") else None,
+                        "permtick": t["symbol"]["underlying"].get("permtick") if t.get("symbol") and t["symbol"].get("underlying") else None,
+                    } if t.get("symbol") and t["symbol"].get("underlying") else None
+                } if t.get("symbol") else None,
 
                 # Trade fields
                 "entryTime": t.get("entryTime"),
@@ -332,7 +386,7 @@ def load_total_performance(data, client, dataset_id):
         if portfolio_rows:
             insert_rows_with_logging(client, portfolio_table_id, portfolio_rows)
 
-        if portfolio_rows:
+        if closed_trades_rows:
             insert_rows_with_logging(client, closed_trades_table_id, closed_trades_rows)
 
 def load_errors(data, client, dataset_id):

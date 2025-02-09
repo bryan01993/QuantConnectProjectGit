@@ -8,6 +8,7 @@ from datetime import timedelta, datetime
 
 class AlgoTester(QCAlgorithm):
     def Initialize(self):
+
         self.SetStartDate(2020, 1, 1)  # Set a fixed start date
         self.SetEndDate(2024, 1, 1)  # Set an end date for backtesting
         self.SetCash(10000)  # Set initial cash to $10000
@@ -15,6 +16,12 @@ class AlgoTester(QCAlgorithm):
         self.spy = self.AddEquity("SPY", Resolution.Daily).Symbol
         self.option = self.AddOption("SPY", Resolution.Daily)
         self.option.SetFilter(self.OptionFilter)
+
+        parameter_test = self.GetParameter("sector")
+        environment_test = self.GetParameter("env")
+
+        self.SetBenchmark("SPY")
+        self.Log(f"{parameter_test} in sector, and {environment_test} in env")
 
         self.next_option_trade = self.Time.replace(day=1)  # Track next option trade day
         self.option_position = None
