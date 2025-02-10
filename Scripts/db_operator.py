@@ -65,10 +65,10 @@ def load_json_to_bigquery(json_file_path, dataset_id):
         shutil.move(src, dst)
         print(f"File moved to {dst}")
 
-    # if count > 0:
-    #     print(f"File {json_file_name} has already been uploaded. Moving file...")
-    #     safe_move(json_file_path, destination_file)
-    #     return
+    if count > 0:
+        print(f"File {json_file_name} has already been uploaded. Moving file...")
+        safe_move(json_file_path, destination_file)
+        return
 
     # Load JSON file
     with open(json_file_path, 'r') as f:
@@ -79,7 +79,9 @@ def load_json_to_bigquery(json_file_path, dataset_id):
     load_backtest(data, client, dataset_id)
     print("Loading research guide data...")
     load_research_guide(data, client, dataset_id)
-    print("Loading charts data...")
+    print("Loading research guide data...")
+    load_backtest_statistics(data, client, dataset_id)
+    print("Loading backtest statistics data...")
     load_charts(data, client, dataset_id)
     print("Loading parameter set data...")
     load_parameter_set(data, client, dataset_id)
@@ -181,31 +183,123 @@ def load_parameter_set(data, client, dataset_id):
 def load_rolling_window_stats(data, client, dataset_id):
     trade_table_id = f"{dataset_id}.BTOPRollingWindowTradeStats"
     portfolio_table_id = f"{dataset_id}.BTOPRollingWindowPortfolioStats"
-#TODO
-    #gotta make sure rolling windows data is getting uploaded correctly.
-    rolling_window = data["backtest"].get("rollingWindow")
-    if rolling_window:
-        trade_rows = [{
-            "tradeStatId": f"{data['backtest'].get('backtestId')}_rw_trade",
-            "backtestId": data["backtest"].get("backtestId"),
-            "startDateTime": rolling_window["tradeStatistics"].get("startDateTime"),
-            "endDateTime": rolling_window["tradeStatistics"].get("endDateTime"),
-            "totalNumberOfTrades": rolling_window["tradeStatistics"].get("totalNumberOfTrades"),
-            "totalProfitLoss": rolling_window["tradeStatistics"].get("totalProfitLoss")
-        }] if rolling_window.get("tradeStatistics") else []
+    closed_trades_table_id = f"{dataset_id}.BTOPRollingWindowClosedTrades"
 
-        portfolio_rows = [{
-            "portfolioStatId": f"{data['backtest'].get('backtestId')}_rw_portfolio",
-            "backtestId": data["backtest"].get("backtestId"),
-            "averageWinRate": rolling_window["portfolioStatistics"].get("averageWinRate"),
-            "profitLossRatio": rolling_window["portfolioStatistics"].get("profitLossRatio")
-        }] if rolling_window.get("portfolioStatistics") else []
+    rolling_window = data["backtest"].get("rollingWindow", {})
+    if not rolling_window:
+        return
 
-        if trade_rows:
-            insert_rows_with_logging(client, trade_table_id, trade_rows)
+    # We'll accumulate all rows across all rolling-window entries here:
+    rolling_trade_rows = []
+    rolling_portfolio_rows = []
 
-        if portfolio_rows:
-            insert_rows_with_logging(client, portfolio_table_id, portfolio_rows)
+    # TODO
+    # Still have not found observation on these items, hence more testing is needed.
+    rolling_closed_trades_rows = []
+
+    for period_key, period_data in rolling_window.items():
+        trade_stats = period_data.get("tradeStatistics")
+        if trade_stats:
+            rolling_trade_rows.append({
+                "tradeStatId": f'{data["backtest"].get("backtestId")}_rw_trade',
+                "backtestId": data["backtest"].get("backtestId"),
+                "rollingWindowId": period_key,
+                "startDateTime": trade_stats.get("startDateTime"),
+                "endDateTime": trade_stats.get("endDateTime"),
+                "totalNumberOfTrades": trade_stats.get("totalNumberOfTrades"),
+                "numberOfWinningTrades": trade_stats.get("numberOfWinningTrades"),
+                "numberOfLosingTrades": trade_stats.get("numberOfLosingTrades"),
+                "totalProfitLoss": trade_stats.get("totalProfitLoss"),
+                "totalProfit": trade_stats.get("totalProfit"),
+                "totalLoss": trade_stats.get("totalLoss"),
+                "largestProfit": trade_stats.get("largestProfit"),
+                "largestLoss": trade_stats.get("largestLoss"),
+                "averageProfitLoss": trade_stats.get("averageProfitLoss"),
+                "averageProfit": trade_stats.get("averageProfit"),
+                "averageLoss": trade_stats.get("averageLoss"),
+                "averageTradeDuration": trade_stats.get("averageTradeDuration"),
+                "averageWinningTradeDuration": trade_stats.get("averageWinningTradeDuration"),
+                "averageLosingTradeDuration": trade_stats.get("averageLosingTradeDuration"),
+                "medianTradeDuration": trade_stats.get("medianTradeDuration"),
+                "medianWinningTradeDuration": trade_stats.get("medianWinningTradeDuration"),
+                "medianLosingTradeDuration": trade_stats.get("medianLosingTradeDuration"),
+                "maxConsecutiveWinningTrades": trade_stats.get("maxConsecutiveWinningTrades"),
+                "maxConsecutiveLosingTrades": trade_stats.get("maxConsecutiveLosingTrades"),
+                "profitLossRatio": trade_stats.get("profitLossRatio"),
+                "winLossRatio": trade_stats.get("winLossRatio"),
+                "winRate": trade_stats.get("winRate"),
+                "lossRate": trade_stats.get("lossRate"),
+                "averageMAE": trade_stats.get("averageMAE"),
+                "averageMFE": trade_stats.get("averageMFE"),
+                "largestMAE": trade_stats.get("largestMAE"),
+                "largestMFE": trade_stats.get("largestMFE"),
+                "maximumClosedTradeDrawdown": trade_stats.get("maximumClosedTradeDrawdown"),
+                "maximumIntraTradeDrawdown": trade_stats.get("maximumIntraTradeDrawdown"),
+                "profitLossStandardDeviation": trade_stats.get("profitLossStandardDeviation"),
+                "profitLossDownsideDeviation": trade_stats.get("profitLossDownsideDeviation"),
+                "profitFactor": trade_stats.get("profitFactor"),
+                "sharpeRatio": trade_stats.get("sharpeRatio"),
+                "sortinoRatio": trade_stats.get("sortinoRatio"),
+                "profitToMaxDrawdownRatio": trade_stats.get("profitToMaxDrawdownRatio"),
+                "maximumEndTradeDrawdown": trade_stats.get("maximumEndTradeDrawdown"),
+                "averageEndTradeDrawdown": trade_stats.get("averageEndTradeDrawdown"),
+                "maximumDrawdownDuration": trade_stats.get("maximumDrawdownDuration"),
+                "totalFees": trade_stats.get("totalFees")
+            })
+
+        portfolio_stats = period_data.get("portfolioStatistics")
+        if portfolio_stats:
+            rolling_portfolio_rows.append({
+                "portfolioStatId": f'{data["backtest"].get("backtestId")}_rw_portfolio',
+                "backtestId": data["backtest"].get("backtestId"),
+                "rollingWindowId": period_key,
+                "averageWinRate": portfolio_stats.get("averageWinRate"),
+                "averageLossRate": portfolio_stats.get("averageLossRate"),
+                "profitLossRatio": portfolio_stats.get("profitLossRatio"),
+                "winRate": portfolio_stats.get("winRate"),
+                "lossRate": portfolio_stats.get("lossRate"),
+                "expectancy": portfolio_stats.get("expectancy"),
+                "startEquity": portfolio_stats.get("startEquity"),
+                "endEquity": portfolio_stats.get("endEquity"),
+                "compoundingAnnualReturn": portfolio_stats.get("compoundingAnnualReturn"),
+                "drawdown": portfolio_stats.get("drawdown"),
+                "totalNetProfit": portfolio_stats.get("totalNetProfit"),
+                "sharpeRatio": portfolio_stats.get("sharpeRatio"),
+                "probabilisticSharpeRatio": portfolio_stats.get("probabilisticSharpeRatio"),
+                "sortinoRatio": portfolio_stats.get("sortinoRatio"),
+                "alpha": portfolio_stats.get("alpha"),
+                "beta": portfolio_stats.get("beta"),
+                "annualStandardDeviation": portfolio_stats.get("annualStandardDeviation"),
+                "annualVariance": portfolio_stats.get("annualVariance"),
+                "informationRatio": portfolio_stats.get("informationRatio"),
+                "trackingError": portfolio_stats.get("trackingError"),
+                "treynorRatio": portfolio_stats.get("treynorRatio"),
+                "portfolioTurnover": portfolio_stats.get("portfolioTurnover"),
+                "valueAtRisk99": portfolio_stats.get("valueAtRisk99"),
+                "valueAtRisk95": portfolio_stats.get("valueAtRisk95")
+            })
+
+        closed_list = period_data.get("closedTrades", [])
+        for ct in closed_list:
+            rolling_closed_trades_rows.append({
+                "rollingWindowId": period_key,
+                "backtestId": data["backtest"].get("backtestId"),
+                "entryTime": ct.get("entryTime"),
+                "entryPrice": ct.get("entryPrice"),
+                "exitTime": ct.get("exitTime"),
+                "exitPrice": ct.get("exitPrice"),
+                "profitLoss": ct.get("profitLoss"),
+                "totalFees": ct.get("totalFees"),
+                "isWin": ct.get("isWin"),
+            })
+
+    # Finally, insert each accumulated list
+    if rolling_trade_rows:
+        insert_rows_with_logging(client, trade_table_id, rolling_trade_rows)
+    if rolling_portfolio_rows:
+        insert_rows_with_logging(client, portfolio_table_id, rolling_portfolio_rows)
+    if rolling_closed_trades_rows:
+        insert_rows_with_logging(client, closed_trades_table_id, rolling_closed_trades_rows)
 
 def load_runtime_statistics(data, client, dataset_id):
     table_id = f"{dataset_id}.BTOPRuntimeStatistics"
@@ -229,39 +323,42 @@ def load_runtime_statistics(data, client, dataset_id):
 
 def load_backtest_statistics(data, client, dataset_id):
     table_id = f"{dataset_id}.BTOPStatistics"
-    bt_stats = data["backtest"].get("statistics", {})
+    bt_stats = data["backtest"].get("statistics")
 
-    rows_to_insert = [{
-        "statisticId": f"{data['backtest'].get('backtestId')}_stat",
-        "backtestId": data["backtest"].get("backtestId"),
-        "totalOrders": bt_stats.get("Total Orders"),
-        "averageWin": bt_stats.get("Average Win"),
-        "averageLoss": bt_stats.get("Average Loss"),
-        "compoundingAnnualReturn": bt_stats.get("Compounding Annual Return"),
-        "drawdown": bt_stats.get("Drawdown"),
-        "expectancy": bt_stats.get("Expectancy"),
-        "startEquity": bt_stats.get("Start Equity"),
-        "endEquity": bt_stats.get("End Equity"),
-        "netProfit": bt_stats.get("Net Profit"),
-        "sharpeRatio": bt_stats.get("Sharpe Ratio"),
-        "sortinoRatio": bt_stats.get("Sortino Ratio"),
-        "probabilisticSharpeRatio": bt_stats.get("Probabilistic Sharpe Ratio"),
-        "lossRate": bt_stats.get("Loss Rate"),
-        "winRate": bt_stats.get("Win Rate"),
-        "profitLossRatio": bt_stats.get("Profit-Loss Ratio"),
-        "alpha": bt_stats.get("Alpha"),
-        "beta": bt_stats.get("Beta"),
-        "annualStandardDeviation": bt_stats.get("Annual Standard Deviation"),
-        "annualVariance": bt_stats.get("Annual Variance"),
-        "informationRatio": bt_stats.get("Information Ratio"),
-        "totalFees": bt_stats.get("Total Fees"),
-        "estimatedStrategyCapacity": bt_stats.get("Estimated Strategy Capacity"),
-        "lowestCapacityAsset": bt_stats.get("Lowest Capacity Asset"),
-        "portfolioTurnover": bt_stats.get("Portfolio Turnover"),
-    }]
+    if bt_stats:
+        rows_to_insert = [{
+            "statisticId": f"{data['backtest'].get('backtestId')}_stat",
+            "backtestId": data["backtest"].get("backtestId"),
+            "totalOrders": bt_stats.get("Total Orders"),
+            "averageWin": bt_stats.get("Average Win"),
+            "averageLoss": bt_stats.get("Average Loss"),
+            "compoundingAnnualReturn": bt_stats.get("Compounding Annual Return"),
+            "drawdown": bt_stats.get("Drawdown"),
+            "expectancy": bt_stats.get("Expectancy"),
+            "startEquity": bt_stats.get("Start Equity"),
+            "endEquity": bt_stats.get("End Equity"),
+            "netProfit": bt_stats.get("Net Profit"),
+            "sharpeRatio": bt_stats.get("Sharpe Ratio"),
+            "sortinoRatio": bt_stats.get("Sortino Ratio"),
+            "probabilisticSharpeRatio": bt_stats.get("Probabilistic Sharpe Ratio"),
+            "lossRate": bt_stats.get("Loss Rate"),
+            "winRate": bt_stats.get("Win Rate"),
+            "profitLossRatio": bt_stats.get("Profit-Loss Ratio"),
+            "alpha": bt_stats.get("Alpha"),
+            "beta": bt_stats.get("Beta"),
+            "annualStandardDeviation": bt_stats.get("Annual Standard Deviation"),
+            "annualVariance": bt_stats.get("Annual Variance"),
+            "informationRatio": bt_stats.get("Information Ratio"),
+            "totalFees": bt_stats.get("Total Fees"),
+            "estimatedStrategyCapacity": bt_stats.get("Estimated Strategy Capacity"),
+            "lowestCapacityAsset": bt_stats.get("Lowest Capacity Asset"),
+            "portfolioTurnover": bt_stats.get("Portfolio Turnover"),
+        }]
+    else:
+        rows_to_insert = None
 
-    if rows_to_insert:
-        insert_rows_with_logging(client, table_id, rows_to_insert)
+        if rows_to_insert:
+            insert_rows_with_logging(client, table_id, rows_to_insert)
 def load_total_performance(data, client, dataset_id):
     trade_table_id = f"{dataset_id}.BTOPTotalPerformanceTradeStats"
     portfolio_table_id = f"{dataset_id}.BTOPTotalPerformancePortfolioStats"
