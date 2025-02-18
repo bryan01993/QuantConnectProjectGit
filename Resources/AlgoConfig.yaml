@@ -44,3 +44,18 @@ ALGOS:
           ALGO_PARAM_1_STEP: 5
       - ALGO_PARAM_2: "full"
     ALGO_SHORT_NAME: "2BAHO"
+
+  - <<: *defaults
+    ALGO_CODE: 3
+    ALGO_NAME: "CrossSectionalImpliedVolatilityMeanReversion"
+    ALGO_MAYUS_LETTERS: "CSIVMR"
+    ALGO_PUBLIC_NAME: "JFKennedy"
+    ALGO_VERSION: 1
+    ALGO_PARAMETRY:
+      - ALGO_PARAM_1:
+          ALGO_PARAM_1_DEFAULT: 15
+          ALGO_PARAM_1_MIN: 10
+          ALGO_PARAM_1_MAX: 20
+          ALGO_PARAM_1_STEP: 5
+      - ALGO_PARAM_2: "full"
+    ALGO_SHORT_NAME: "3CSIVMR"

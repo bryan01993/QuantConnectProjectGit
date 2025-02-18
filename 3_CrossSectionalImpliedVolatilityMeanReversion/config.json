@@ -1,0 +1,11 @@
+{
+    "algorithm-language": "Python",
+    "parameters": {},
+    "description": "",
+    "libraries": [
+        {
+            "name": "PropietaryCode",
+            "path": "Library\\PropietaryCode"
+        }
+    ]
+}
