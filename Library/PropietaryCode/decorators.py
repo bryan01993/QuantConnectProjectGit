@@ -25,6 +25,12 @@ def monitor_execution(func):
         tracemalloc.stop()
         execution_time = end_time - start_time
 
+        # Limit result size if it's a list
+        if isinstance(result, list) and len(result) > 5:
+            result_display = result[:5] + ["..."]  # Keep first 5 elements and indicate truncation
+        else:
+            result_display = result
+
         # Ensure self has Log method (it should be an instance of QCAlgorithm)
         if hasattr(self, "Log"):
             log_entry = {
@@ -35,7 +41,7 @@ def monitor_execution(func):
                 "peak_memory": f"{peak / 1024:.2f} KB",
                 "args": args,
                 "kwargs": kwargs,
-                "result": result
+                "result": result_display
             }
             self.Log(str(log_entry))
         else:

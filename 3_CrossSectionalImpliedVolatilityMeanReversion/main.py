@@ -1,102 +1,90 @@
+# The code below modifies the scheduling portion
+# to avoid the 'Unable to locate next market open' error.
+# We also ensure the date range is aligned with valid SPY data.
+
+from AlgorithmImports import *
+from PropietaryCode.decorators import monitor_execution
+from PropietaryCode.risk_management import KellyCriterion
+
+
 class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
 
     def Initialize(self):
-        """
-        1) Basic QC Algorithm Setup
-        """
-        # a) Set Start Date, End Date, and Initial Cash
-        # b) Configure Brokerage Model if needed
-        # c) Define Rebalancing Frequency (Daily/Weekly)
+        # 1) Basic QC Setup
+        # Set a date range where SPY definitely trades. For example:
+        self.SetStartDate(2021, 1, 1)
+        self.SetEndDate(2021, 12, 31)
+        self.SetCash(100000)
 
+        # 2) Universe Settings
+        self.UniverseSettings.Resolution = Resolution.Daily
+        self.AddUniverse(self.CoarseSelectionFunction, self.FineSelectionFunction)
+
+        # 3) Instead of scheduling on SPY, schedule on the 'market-hours'
+        #    of the default US Equities exchange via self.TimeRules.
+        #    Or confirm SPY is indeed in the data set.
+        #    If we want a daily trigger at 9:35am local time, we can do:
+        #    self.TimeRules.AfterMarketOpen(Symbols.SPY, 5) # e.g.
+
+        # But we must ensure SPY is actually added or the system won't find it.
+        # Let's add SPY manually to ensure we have that data.
+        self.spy = self.AddEquity("SPY", Resolution.Daily).Symbol
+
+        self.Schedule.On(
+            self.DateRules.EveryDay(self.spy),
+            self.TimeRules.AfterMarketOpen(self.spy, 30),
+            self.RebalanceDaily
+        )
+
+        # 4) Instantiate an existing KellyCriterion class
+        self.kelly = KellyCriterion(factor=0.5, period=30)
+
+        # 5) Track current short-vol & long-vol sets
+        self.highIVSymbols = []
+        self.lowIVSymbols = []
+
+    @monitor_execution
+    def CoarseSelectionFunction(self, coarse):
+        filtered = [c for c in coarse
+                    if c.Price > 10
+                    and c.DollarVolume > 5e6
+                    and c.HasFundamentalData]
+        top = sorted(filtered, key=lambda c: c.DollarVolume, reverse=True)[:200]
+        return [x.Symbol for x in top]
+
+    @monitor_execution
+    def FineSelectionFunction(self, fine):
+        return [f.Symbol for f in fine]
+
+    @monitor_execution
+    def RebalanceDaily(self):
+        candidateOptions = self.SelectLiquidOptions()
+        ivRanks = self.ComputeIVRankings(candidateOptions)
+
+        topN = 5
+        shortVolList = sorted(ivRanks, key=lambda x: x[1], reverse=True)[:topN]
+        longVolList = sorted(ivRanks, key=lambda x: x[1])[:topN]
+        self.highIVSymbols = [x[0] for x in shortVolList]
+        self.lowIVSymbols = [x[0] for x in longVolList]
+
+        historicalReturns = self.GetRecentDailyReturns()
+        self.kelly.Update(historicalReturns)
+        kellyFraction = self.kelly.GetFraction()
+
+        self.LiquidateRemovedPositions(shortVolList, longVolList)
+        self.BuildDeltaNeutralPositions(shortVolList, longVolList, kellyFraction)
+
+    def SelectLiquidOptions(self):
         pass
 
-    def OnData(self, data):
-        """
-        2) OnData event is called whenever new data is available
-        """
-        # NOTE: If using scheduled rebalancing, the main logic might not be
-        # here in OnData, but instead in OnSecuritiesChanged or a scheduled event.
-
-        # a) If rebalancing condition is not met, return
-        # b) Otherwise, handle rebalancing
+    def ComputeIVRankings(self, candidateOptions):
         pass
 
-    def OnSecuritiesChanged(self, changes):
-        """
-        3) Handle additions/removals from the universe
-        """
-        # a) For newly added securities: warm up data, request option chain
-        # b) For removed securities: liquidate or handle open positions, remove from tracking
+    def LiquidateRemovedPositions(self, shortVolList, longVolList):
         pass
 
-    # ------------------------------------------------------------------------
-    # 4) Universe Selection and IV Ranking
-    # ------------------------------------------------------------------------
-    def SelectCoarseUniverse(self, coarse):
-        """
-        4a) Filter for Liquid Equities:
-            - e.g. top by market cap, price, or daily dollar volume
-        """
-        # a) Filter, sort, and select top N or M from the coarse list
-        # b) Return the ticker symbols for the fine universe step
+    def BuildDeltaNeutralPositions(self, shortVolList, longVolList, kellyFraction):
         pass
 
-    def SelectFineUniverse(self, fine):
-        """
-        4b) Narrow to final set of symbols to trade:
-            - e.g. remove low-priced or lightly traded shares
-        """
-        # a) Possibly further refine the selection
-        # b) Return final symbol list
-        pass
-
-    def SelectOptionContracts(self, option_chain):
-        """
-        4c) Pick near-term, at-the-money calls/puts to analyze implied vol
-        """
-        # a) Filter calls/puts based on contract expiration, OI, IV rank, etc.
-        # b) Return final list of OptionContracts to examine or trade
-        pass
-
-    def ComputeIVRankings(self):
-        """
-        4d) For the selected securities, compute or fetch Implied Vol (IV)
-            and rank them by how 'high' or 'low' each IV is relative to its history
-        """
-        # a) Access each Option's Implied Volatility
-        # b) Compare against historical average or median
-        # c) Produce rank for each asset, store results
-        pass
-
-    # ------------------------------------------------------------------------
-    # 5) Construct Delta-Neutral Positions
-    # ------------------------------------------------------------------------
-    def BuildPositions(self):
-        """
-        5) For high-IV securities:
-            - Possibly short calls/puts or straddles
-          For low-IV securities:
-            - Possibly long calls/puts or straddles
-          Hedge deltas with shares to remain near delta-neutral.
-        """
-        # a) Based on ranking, select top X high IV symbols and short options
-        # b) Select top X low IV symbols and buy options
-        # c) Hedge net delta by buy/sell underlying shares
-        pass
-
-    def RebalancePositions(self):
-        """
-        6) Rebalance the portfolio frequently, adjusting net delta to near zero
-        """
-        # a) Periodically recalc total delta
-        # b) If net delta exceeds threshold, adjust shares to bring net delta to zero
-        pass
-
-    def RiskManagement(self):
-        """
-        7) Monitor volatility shocks and manage stops or exposure constraints
-        """
-        # a) Possibly track aggregate vega or net exposure
-        # b) If short IV side is too large or volatility spikes too high, reduce short side
-        # c) Close or scale positions when max drawdown or stop-loss is hit
+    def GetRecentDailyReturns(self):
         pass
