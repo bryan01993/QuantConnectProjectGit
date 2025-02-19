@@ -1,6 +1,6 @@
 from AlgorithmImports import *
 from datetime import timedelta
-from PropietaryCode.decorators import FunctionLogger
+from PropietaryCode.decorators import monitor_execution
 from PropietaryCode.BSMModel import BsmModel
 
 
@@ -11,7 +11,6 @@ from PropietaryCode.BSMModel import BsmModel
 class BuyAndHoldOptions(QCAlgorithm):
 
     def Initialize(self):
-        self.logger = FunctionLogger(self)
         self.SetStartDate(2015, 1, 1)  # Set Start Date
         self.SetEndDate(2015, 12, 31)  # Set End Date
         self.SetCash(100000)  # Set Strategy Cash
@@ -43,13 +42,13 @@ class BuyAndHoldOptions(QCAlgorithm):
         self.Settings.MinimumOrderMarginPortfolioPercentage = 10
         self.Debug("BuyAndHoldOptions Initialized")
 
-    @FunctionLogger.log
+    @monitor_execution
     def UniverseFunc(self, universe):
         return universe.IncludeWeeklys() \
             .Strikes(-2, 2) \
             .Expiration(timedelta(days=20), timedelta(days=40))
 
-    @FunctionLogger.log
+    @monitor_execution
     def CoarseSelectionFunction(self, coarse):
         # Filter the universe for only the tickers we're interested in
         filtered_symbols = [x.Symbol for x in coarse if x.Symbol.Value in self.equities]
@@ -102,7 +101,7 @@ class BuyAndHoldOptions(QCAlgorithm):
     #     # self.EmitInsights(Insight.Price(self.call.Symbol, timedelta(40), InsightDirection.Down))
     #     self.Sell(self.call.Symbol, quantity).UpdateTag("Open Short Call Position")
 
-    @FunctionLogger.log
+    @monitor_execution
     def CalculateVolatility(self, underlying_symbol):
         """Scheduled event to calculate volatility daily"""
         try:
@@ -114,7 +113,7 @@ class BuyAndHoldOptions(QCAlgorithm):
             self.Debug(f"Exception: {e}")
             return
 
-    @FunctionLogger.log
+    @monitor_execution
     def get_current_underlying_price(self, slice):
         return
 
@@ -210,7 +209,7 @@ class BuyAndHoldOptions(QCAlgorithm):
     # #         .Strikes(-1, 1) \
     # #         .Expiration(timedelta(0), timedelta(10))
 
-    @FunctionLogger.log
+    @monitor_execution
     def OnOrderEvent(self, orderEvent):
         """ Liquidate stocks in case an option has been exercised"""
         order = self.Transactions.GetOrderById(orderEvent.OrderId)
