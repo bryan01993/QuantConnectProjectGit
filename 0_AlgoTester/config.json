@@ -1,8 +1,9 @@
 {
     "algorithm-language": "Python",
-    "start-date": "2019-01-01",
-    "end-date": "2023-01-01",
     "parameters": {
+        "execution.initial_amount" : "10000.00",
+        "execution.start_date": "2019-01-01",
+        "execution.end_date": "2023-01-01",
         "sector": "testing",
         "env": "develop"
     },

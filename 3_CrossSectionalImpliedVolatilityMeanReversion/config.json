@@ -1,7 +1,7 @@
 {
     "algorithm-language": "Python",
     "parameters": {},
-    "description": "",
+    "description": "Self mean reversion in option vs stock volatility trade.",
     "libraries": [
         {
             "name": "PropietaryCode",

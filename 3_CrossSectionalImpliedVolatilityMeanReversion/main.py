@@ -32,11 +32,11 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         #    Or confirm SPY is indeed in the data set.
         self.spy = self.AddEquity("SPY", Resolution.Daily).Symbol
 
-        self.Schedule.On(
-            self.DateRules.EveryDay(self.spy),
-            self.TimeRules.AfterMarketOpen(self.spy, 30),
-            self.RebalanceDaily
-        )
+        # self.Schedule.On(
+        #     self.DateRules.EveryDay(self.spy),
+        #     self.TimeRules.AfterMarketOpen(self.spy, 30),
+        #     self.RebalanceDaily
+        # )
 
         # 4) Instantiate an existing KellyCriterion class
         self.kelly = KellyCriterion(factor=0.5, period=30)
@@ -70,52 +70,52 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
             return []
         return [f.Symbol for f in fine]
 
-    @monitor_execution
-    def RebalanceDaily(self):
-        candidateOptions = self.SelectLiquidOptions()
-        if not candidateOptions:
-            self.Debug("SelectLiquidOptions returned no candidates; skipping rebalancing.")
-            return
+    # @monitor_execution
+    # def RebalanceDaily(self):
+    #     candidateOptions = self.SelectLiquidOptions()
+    #     if not candidateOptions:
+    #         self.Debug("SelectLiquidOptions returned no candidates; skipping rebalancing.")
+    #         return
+    #
+    #     ivRanks = self.ComputeIVRankings(candidateOptions)
+    #     if not ivRanks:
+    #         self.Debug("ComputeIVRankings returned empty; skipping rebalancing.")
+    #         return
 
-        ivRanks = self.ComputeIVRankings(candidateOptions)
-        if not ivRanks:
-            self.Debug("ComputeIVRankings returned empty; skipping rebalancing.")
-            return
+        # topN = 5
+        # # Sort by rank desc for shortVol, ascending for longVol
+        # shortVolList = sorted(ivRanks, key=lambda x: x[1], reverse=True)[:topN]
+        # longVolList = sorted(ivRanks, key=lambda x: x[1])[:topN]
+        # if not shortVolList and not longVolList:
+        #     self.Debug("No valid IV rank candidates. Skipping.")
+        #     return
+        #
+        # self.highIVSymbols = [x[0] for x in shortVolList]
+        # self.lowIVSymbols = [x[0] for x in longVolList]
+        #
+        # historicalReturns = self.GetRecentDailyReturns()
+        # self.kelly.Update(historicalReturns)
+        # kellyFraction = self.kelly.GetFraction()
+        #
+        # self.LiquidateRemovedPositions(shortVolList, longVolList)
+        # self.BuildDeltaNeutralPositions(shortVolList, longVolList, kellyFraction)
 
-        topN = 5
-        # Sort by rank desc for shortVol, ascending for longVol
-        shortVolList = sorted(ivRanks, key=lambda x: x[1], reverse=True)[:topN]
-        longVolList = sorted(ivRanks, key=lambda x: x[1])[:topN]
-        if not shortVolList and not longVolList:
-            self.Debug("No valid IV rank candidates. Skipping.")
-            return
-
-        self.highIVSymbols = [x[0] for x in shortVolList]
-        self.lowIVSymbols = [x[0] for x in longVolList]
-
-        historicalReturns = self.GetRecentDailyReturns()
-        self.kelly.Update(historicalReturns)
-        kellyFraction = self.kelly.GetFraction()
-
-        self.LiquidateRemovedPositions(shortVolList, longVolList)
-        self.BuildDeltaNeutralPositions(shortVolList, longVolList, kellyFraction)
-
-    def SelectLiquidOptions(self):
-        # TODO: Filter for liquidity, e.g. OI, narrow spreads, near money.
-        return []
-
-    def ComputeIVRankings(self, candidateOptions):
-        # TODO: Return a list of tuples (symbol, iv_rank)
-        return []
-
-    def LiquidateRemovedPositions(self, shortVolList, longVolList):
-        # TODO: Liquidate if not in shortVolList or longVolList.
-        pass
-
-    def BuildDeltaNeutralPositions(self, shortVolList, longVolList, kellyFraction):
-        # TODO: Build delta-neutral positions.
-        pass
-
-    def GetRecentDailyReturns(self):
-        # TODO: Return daily returns of the strategy or portfolio.
-        return []
+    # def SelectLiquidOptions(self):
+    #     # TODO: Filter for liquidity, e.g. OI, narrow spreads, near money.
+    #     return []
+    #
+    # def ComputeIVRankings(self, candidateOptions):
+    #     # TODO: Return a list of tuples (symbol, iv_rank)
+    #     return []
+    #
+    # def LiquidateRemovedPositions(self, shortVolList, longVolList):
+    #     # TODO: Liquidate if not in shortVolList or longVolList.
+    #     pass
+    #
+    # def BuildDeltaNeutralPositions(self, shortVolList, longVolList, kellyFraction):
+    #     # TODO: Build delta-neutral positions.
+    #     pass
+    #
+    # def GetRecentDailyReturns(self):
+    #     # TODO: Return daily returns of the strategy or portfolio.
+    #     return []
