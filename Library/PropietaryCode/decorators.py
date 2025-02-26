@@ -25,9 +25,15 @@ def monitor_execution(func):
         tracemalloc.stop()
         execution_time = end_time - start_time
 
+        # Handle cases where args or kwargs are empty
+        args_display = args if args else None
+        kwargs_display = kwargs if kwargs else None
+
         # Limit result size if it's a list or iterator
         try:
-            if isinstance(result, list):
+            if result is None:
+                result_display = "No return value"
+            elif isinstance(result, list):
                 if len(result) > 5:
                     result_display = result[:5] + ["..."]  # Keep first 5 elements and indicate truncation
                 elif len(result) == 0:
@@ -53,8 +59,8 @@ def monitor_execution(func):
                 "execution_time": f"{execution_time:.6f} sec",
                 "memory_usage": f"{current / 1024:.2f} KB",
                 "peak_memory": f"{peak / 1024:.2f} KB",
-                "args": args,
-                "kwargs": kwargs,
+                "args": args_display,
+                "kwargs": kwargs_display,
                 "result": result_display
             }
             self.Log(str(log_entry))

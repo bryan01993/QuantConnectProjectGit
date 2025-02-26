@@ -1,9 +1,18 @@
 {
     "algorithm-language": "Python",
     "parameters": {
-        "execution.initial_amount" : "10000.00",
-        "execution.start_date": "2019-01-01",
-        "execution.end_date": "2023-01-01",
+        "hp.exec.initial_amount" : "10000.00",
+        "hp.exec.start_date": "2019-01-01",
+        "hp.exec.end_date": "2023-01-01",
+        "univ.coarse.size": "100",
+        "univ.coarse.min_price" : 10,
+        "univ.fine.factor": "0.5",
+        "risk.kelly.periods" : "30",
+        "algo.option.upper_filter" : "+2",
+        "algo.option.lower_filter" : "-2",
+        "algo.option.max_exp_days": "60",
+        "algo.option.min_exp_days": "10",
+
         "sector": "testing",
         "env": "develop"
     },

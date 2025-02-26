@@ -23,9 +23,11 @@ class AlgoTester(QCAlgorithm):
 
         parameter_test = self.GetParameter("sector")
         environment_test = self.GetParameter("env")
+        universe_coarse_size_test = self.GetParameter("univ.coarse.size")
 
         self.SetBenchmark("SPY")
         self.Log(f"{parameter_test} in sector, and {environment_test} in env")
+        self.Log(f"{universe_coarse_size_test} in universe_coarse_size_test, and data type {type(universe_coarse_size_test)}.")
 
         self.next_option_trade = self.Time.replace(day=1)  # Track next option trade day
         self.option_position = None
