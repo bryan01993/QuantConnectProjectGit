@@ -1,5 +1,6 @@
 from AlgorithmImports import *
 from PropietaryCode.decorators import monitor_execution
+from PropietaryCode.memory_decorator import  measure_memory_usage
 from PropietaryCode.risk_management import KellyCriterion
 from datetime import timedelta
 import random
@@ -41,7 +42,8 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         # so we can do AddOption(...) for them.
         self.underlyingSymbols = set()
 
-    @monitor_execution
+    # @measure_memory_usage
+    #@monitor_execution
     def OnSecuritiesChanged(self, changes):
         self.Log("OnSecuritiesChanged event")
         # For each equity security added, also add Option data
@@ -60,7 +62,8 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         # Keep reference to slice-based OptionChains dictionary
         self.latestOptionChains = slice.OptionChains
 
-    @monitor_execution
+    # @measure_memory_usage
+    #@monitor_execution
     def CoarseSelectionFunction(self, coarse):
         filtered = [c for c in coarse
                     if c.Price > 10
@@ -72,7 +75,7 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
             return []
         return [x.Symbol for x in top]
 
-    @monitor_execution
+    #@monitor_execution
     def FineSelectionFunction(self, fine):
         if not fine:
             self.Log("FineSelectionFunction found no securities.")
@@ -81,7 +84,7 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         self.underlyingSymbols = set([f.Symbol for f in fine])
         return list(self.underlyingSymbols)
 
-    @monitor_execution
+    #@monitor_execution
     def RebalanceDaily(self):
         candidateOptions = self.SelectLiquidOptions()
         if not candidateOptions:
@@ -111,7 +114,7 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         self.LiquidateRemovedPositions(shortVolList, longVolList)
         self.BuildDeltaNeutralPositions(shortVolList, longVolList, kellyFraction)
 
-    @monitor_execution
+    #@monitor_execution
     def SelectLiquidOptions(self):
         self.Log("SelectLiquidOptions: Using slice-based OptionChains.")
         results = []
@@ -133,7 +136,7 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         self.Log(f"SelectLiquidOptions: Found {len(results)} option(s).")
         return results
 
-    @monitor_execution
+    #@monitor_execution
     def ComputeIVRankings(self, candidateOptions):
         self.Log("ComputeIVRankings: Starting placeholder logic.")
         random.seed(42)
@@ -146,7 +149,7 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         self.Log(f"ComputeIVRankings: Returning {len(ivRankList)} rank entries.")
         return ivRankList
 
-    @monitor_execution
+    #@monitor_execution
     def LiquidateRemovedPositions(self, shortVolList, longVolList):
         self.Log("LiquidateRemovedPositions: Checking portfolio...")
         keepSymbols = set([x[0] for x in shortVolList] + [x[0] for x in longVolList])
@@ -156,7 +159,7 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
                 self.Log(f"LiquidateRemovedPositions: Liquidating {holding.Symbol}")
                 self.Liquidate(holding.Symbol)
 
-    # @monitor_execution
+    # #@monitor_execution
     def BuildDeltaNeutralPositions(self, shortVolList, longVolList, kellyFraction):
         self.Log("BuildDeltaNeutralPositions: Adjusting positions for delta neutrality.")
         for sym, rank in shortVolList:
@@ -169,7 +172,7 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
                 self.MarketOrder(sym, 1)
         self.Log("BuildDeltaNeutralPositions: Delta hedge logic not yet implemented.")
 
-    @monitor_execution
+    #@monitor_execution
     def GetRecentDailyReturns(self):
         self.Log("GetRecentDailyReturns: Starting placeholder logic.")
         return [random.uniform(-0.01, 0.01) for _ in range(30)]
