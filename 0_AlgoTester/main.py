@@ -9,9 +9,9 @@ from datetime import timedelta, datetime
 class AlgoTester(QCAlgorithm):
     def Initialize(self):
 
-        self.SetStartDate(*map(int, self.GetParameter("execution.start_date").split('-')))  # Set a fixed start date
-        self.SetEndDate(*map(int, self.GetParameter("execution.end_date").split('-')))   # Set a fixed end date
-        initial_amount = self.GetParameter("execution.initial_amount")
+        self.SetStartDate(*map(int, self.GetParameter("exec.start_date").split('-')))  # Set a fixed start date
+        self.SetEndDate(*map(int, self.GetParameter("exec.end_date").split('-')))   # Set a fixed end date
+        initial_amount = self.GetParameter("exec.initial_amount")
         if not initial_amount:
             self.Debug("initial amount is not retrieved")
         self.Debug(f"initial_amount = {initial_amount} with type {type(initial_amount)}")

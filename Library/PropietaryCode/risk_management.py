@@ -12,8 +12,8 @@ class KellyCriterion:
     def __init__(self, factor, period):
         # factor: scale Kelly bet fraction
         # period: number of trades or returns we keep
-        self._factor = factor
-        self._period = period
+        self._factor = factor if factor else 0.5 # Default values
+        self._period = period if period else 30  # Default values
         self._returns = np.array([])  # store recent trade/daily returns
 
     def Update(self, dailyReturns):

@@ -1,6 +1,5 @@
 from AlgorithmImports import *
-from PropietaryCode.decorators import monitor_execution
-from PropietaryCode.memory_decorator import  measure_memory_usage
+from PropietaryCode.decorators import monitor_execution, measure_memory_usage
 from PropietaryCode.risk_management import KellyCriterion
 from datetime import timedelta
 import random
@@ -9,9 +8,10 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
 
     def Initialize(self):
         # 1) Basic QC Setup
-        self.SetStartDate(2021, 1, 1)
-        self.SetEndDate(2024, 12, 31)
-        self.SetCash(100000)
+        self.SetStartDate(*map(int, self.GetParameter("exec.start_date").split('-')))  # Set a fixed start date
+        self.SetEndDate(*map(int, self.GetParameter("exec.end_date").split('-')))   # Set a fixed end date
+        self.SetCash(self.GetParameter("exec.initial_amount"))
+        self.Debug(f"initial_amount = {self.GetParameter('exec.initial_amount')} with type {type(self.GetParameter('exec.initial_amount'))}")
 
         # 2) Universe Settings
         self.UniverseSettings.Resolution = Resolution.Daily
@@ -29,7 +29,8 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         )
 
         # 5) KellyCriterion for sizing
-        self.kelly = KellyCriterion(factor=0.5, period=30)
+        self.kelly = KellyCriterion(factor=float(self.GetParameter("risk.kelly.factor")),
+                                    period=int(self.GetParameter("risk.kelly.period")))
 
         # 6) short-vol & long-vol lists
         self.highIVSymbols = []
@@ -66,10 +67,11 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
     #@monitor_execution
     def CoarseSelectionFunction(self, coarse):
         filtered = [c for c in coarse
-                    if c.Price > 10
-                    and c.DollarVolume > 5e6
+                    if c.Price > int(self.GetParameter("univ.coarse.min_price"))
+                    and c.Price < int(self.GetParameter("univ.coarse.max_price"))
+                    and c.DollarVolume > int(self.GetParameter("univ.coarse.dollar_volume"))
                     and c.HasFundamentalData]
-        top = sorted(filtered, key=lambda c: c.DollarVolume, reverse=True)[:10]
+        top = sorted(filtered, key=lambda c: c.DollarVolume, reverse=True)[:int(self.GetParameter("univ.coarse.final_cut"))]
         if not top:
             self.Log("CoarseSelectionFunction returned empty.")
             return []
@@ -125,9 +127,9 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         for symbol, chain in self.latestOptionChains.items():
             # Filter for near expiry (< 45 days), near the money (±5%), decent OI
             contracts = [o for o in chain
-                         if (o.Expiry - self.Time).days < 45
+                         if (o.Expiry - self.Time).days < int(self.GetParameter("algo.option.max_exp_days"))
                             and abs(o.Strike - chain.Underlying.Price)/chain.Underlying.Price < 0.05
-                            and o.OpenInterest > 100]
+                            and o.OpenInterest > int(self.GetParameter("algo.option.min_open_inter"))]
             if not contracts:
                 continue
             bestContract = sorted(contracts, key=lambda x: x.OpenInterest, reverse=True)[0]
