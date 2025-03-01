@@ -140,16 +140,52 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
 
     #@monitor_execution
     def ComputeIVRankings(self, candidateOptions):
-        self.Log("ComputeIVRankings: Starting placeholder logic.")
-        random.seed(42)
+        """
+        For each option contract, retrieve the contract’s ImpliedVolatility
+        and subtract the underlying's historical volatility to form a 'rank'.
+        """
+        self.Log("ComputeIVRankings: Using actual contract IV and underlying HV.")
         ivRankList = []
+
+        # In your real code, consider storing a RollingWindow of the underlying’s returns
+        # to compute historical volatility. We'll do a placeholder function below.
         for sym in candidateOptions:
-            currentIV = random.uniform(0.2, 0.6)
-            historicalMeanIV = 0.3
-            rank = currentIV - historicalMeanIV
+            if sym not in self.Securities:
+                self.Log(f"ComputeIVRankings: Security {sym} not found in self.Securities.")
+                continue
+
+            optionSecurity = self.Securities[sym]
+            # The Option object’s Greeks property has ImpliedVolatility
+            currentIV = optionSecurity.Greeks.ImpliedVolatility
+
+            if currentIV is None or currentIV <= 0:
+                # Fallback in case there's no valid IV from data
+                currentIV = 0.30
+
+            # Underlying is sym.Underlying
+            underlying = sym.Underlying
+            # We'll compute or retrieve the historical volatility from a placeholder function
+            histVol = self.ComputeHistoricalVol(underlying)
+
+            # The rank is how high the contract's implied vol is relative to underlying’s HV
+            rank = currentIV - histVol
             ivRankList.append((sym, rank))
+
         self.Log(f"ComputeIVRankings: Returning {len(ivRankList)} rank entries.")
         return ivRankList
+
+    def ComputeHistoricalVol(self, underlyingSymbol):
+        """
+        Placeholder function to compute or retrieve the historical volatility
+        of the underlying stock. Possibly you'd keep a rolling window of
+        daily returns or use self.Securities[underlyingSymbol].VolatilityModel.
+        For demonstration, let's do a naive constant 0.25 HV.
+        """
+        # e.g. you might do:
+        hv = self.Securities[underlyingSymbol].VolatilityModel.Volatility
+        if hv is None or hv <= 0:
+            hv = 0.25
+        return hv
 
     #@monitor_execution
     def LiquidateRemovedPositions(self, shortVolList, longVolList):
@@ -161,7 +197,7 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
                 self.Log(f"LiquidateRemovedPositions: Liquidating {holding.Symbol}")
                 self.Liquidate(holding.Symbol)
 
-    # #@monitor_execution
+# #@monitor_execution
     def BuildDeltaNeutralPositions(self, shortVolList, longVolList, kellyFraction):
         self.Log("BuildDeltaNeutralPositions: Adjusting positions for delta neutrality.")
         for sym, rank in shortVolList:
@@ -174,7 +210,7 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
                 self.MarketOrder(sym, 1)
         self.Log("BuildDeltaNeutralPositions: Delta hedge logic not yet implemented.")
 
-    #@monitor_execution
+#@monitor_execution
     def GetRecentDailyReturns(self):
         self.Log("GetRecentDailyReturns: Starting placeholder logic.")
         return [random.uniform(-0.01, 0.01) for _ in range(30)]
