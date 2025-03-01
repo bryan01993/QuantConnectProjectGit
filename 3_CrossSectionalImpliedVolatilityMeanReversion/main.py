@@ -8,8 +8,8 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
 
     def Initialize(self):
         # 1) Basic QC Setup
-        self.SetStartDate(2023, 1, 1)
-        self.SetEndDate(2023, 12, 31)
+        self.SetStartDate(2021, 1, 1)
+        self.SetEndDate(2024, 12, 31)
         self.SetCash(100000)
 
         # 2) Universe Settings
@@ -162,11 +162,11 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         for sym, rank in shortVolList:
             if not self.Portfolio[sym].Invested:
                 self.Log(f"ShortVol {sym.Value} rank={rank:.3f}. Opening short call position.")
-                # self.MarketOrder(sym, -1)
+                self.MarketOrder(sym, -1)
         for sym, rank in longVolList:
             if not self.Portfolio[sym].Invested:
                 self.Log(f"LongVol {sym.Value} rank={rank:.3f}. Opening long call position.")
-                # self.MarketOrder(sym, 1)
+                self.MarketOrder(sym, 1)
         self.Log("BuildDeltaNeutralPositions: Delta hedge logic not yet implemented.")
 
     @monitor_execution

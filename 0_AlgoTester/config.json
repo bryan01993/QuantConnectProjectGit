@@ -1,9 +1,9 @@
 {
     "algorithm-language": "Python",
     "parameters": {
-        "hp.exec.initial_amount" : "10000.00",
-        "hp.exec.start_date": "2019-01-01",
-        "hp.exec.end_date": "2023-01-01",
+        "exec.initial_amount" : "10000.00",
+        "exec.start_date": "2019-01-01",
+        "exec.end_date": "2023-01-01",
         "univ.coarse.size": "100",
         "univ.coarse.min_price" : 10,
         "univ.fine.factor": "0.5",
