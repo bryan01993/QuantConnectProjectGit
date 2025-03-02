@@ -7,7 +7,7 @@ import argparse  # For parsing command-line arguments
 import datetime  # For timestamp formatting
 
 # Setup logging configuration
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 # Define main function
 def main():
@@ -53,7 +53,7 @@ def main():
 # Define function to parse command-line arguments
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Backtesting Launcher for QuantConnect")
-    parser.add_argument("algorithm_name", type=str, nargs="?", default="StatisticalArbitrageOptionsPair",
+    parser.add_argument("algorithm_name", type=str, nargs="?", default="AlgoTester",
                         help="Name or shortname of the algorithm to backtest")
     return parser.parse_args()
 
@@ -102,26 +102,28 @@ def validate_config(parsed_data):
     return True
 
 
-# Define function to extract parsed data into individual variables
+# Define function to extract parsed_data into individual variables
 def extract_parsed_data(parsed_data):
     cmd_algo_code = parsed_data.get("ALGO_CODE")
     cmd_algo_name = parsed_data.get("ALGO_NAME")
-    cmd_algo_proyect = f"{cmd_algo_code}_{cmd_algo_name}"
+    # We refactor this to just code+shortName.
+    cmd_algo_short_name = parsed_data.get("ALGO_SHORT_NAME")
+    cmd_algo_proyect = f"{cmd_algo_short_name}"  # changed
+
     cmd_algo_mayus_letters = parsed_data.get("ALGO_MAYUS_LETTERS")
     cmd_algo_public_name = parsed_data.get("ALGO_PUBLIC_NAME")
     cmd_algo_version = parsed_data.get("ALGO_VERSION")
-    cmd_algo_short_name = parsed_data.get("ALGO_SHORT_NAME")
     cmd_algo_parametry = parsed_data.get("ALGO_PARAMETRY")
     cmd_algo_start_date = parsed_data.get("START_DATE")
     cmd_algo_end_date = parsed_data.get("END_DATE")
     return {
         "cmd_algo_code": cmd_algo_code,
         "cmd_algo_name": cmd_algo_name,
+        "cmd_algo_short_name": cmd_algo_short_name,
         "cmd_algo_proyect": cmd_algo_proyect,
         "cmd_algo_mayus_letters": cmd_algo_mayus_letters,
         "cmd_algo_public_name": cmd_algo_public_name,
         "cmd_algo_version": cmd_algo_version,
-        "cmd_algo_short_name": cmd_algo_short_name,
         "cmd_algo_parametry": cmd_algo_parametry,
         "cmd_algo_start_date": cmd_algo_start_date,
         "cmd_algo_end_date": cmd_algo_end_date
@@ -132,9 +134,9 @@ def extract_parsed_data(parsed_data):
 def format_command(cmd_vars):
     # Generate sequential identifier for backtest
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    backtest_id = f"BT_{cmd_vars['cmd_algo_proyect']}_{cmd_vars['cmd_algo_start_date']}_{cmd_vars['cmd_algo_end_date']}_V{cmd_vars['cmd_algo_version']}_{timestamp}"
+    backtest_id = f"BT_{cmd_vars['cmd_algo_proyect']}_V{cmd_vars['cmd_algo_version']}_{timestamp}"
     # Format the command used for cloud backtesting based on cmd_vars
-    command = f"lean cloud backtest {cmd_vars['cmd_algo_proyect']} --name {backtest_id}"
+    command = f"lean cloud backtest {cmd_vars['cmd_algo_code']}_{cmd_vars['cmd_algo_name']} --name {backtest_id}"
     print(f"{command}")
     return command
 

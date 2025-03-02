@@ -141,6 +141,7 @@ def load_research_guide(data, client, dataset_id):
         insert_rows_with_logging(client, table_id, rows_to_insert)
 
 def load_charts(data, client, dataset_id):
+    #TODO It is not inserting at least Strategy Equity Chart, which does come populated in Results
     table_id = f"{dataset_id}.BTOPCharts"
     rows_to_insert = [{
         "chartId": f"{data['backtest'].get('backtestId')}_chart",

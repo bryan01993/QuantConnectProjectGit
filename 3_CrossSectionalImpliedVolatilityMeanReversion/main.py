@@ -2,7 +2,9 @@ from AlgorithmImports import *
 from PropietaryCode.decorators import monitor_execution, measure_memory_usage
 from PropietaryCode.risk_management import KellyCriterion
 from datetime import timedelta
+import math
 import random
+import numpy as np
 
 class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
 
@@ -10,8 +12,10 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         # 1) Basic QC Setup
         self.SetStartDate(*map(int, self.GetParameter("exec.start_date").split('-')))  # Set a fixed start date
         self.SetEndDate(*map(int, self.GetParameter("exec.end_date").split('-')))   # Set a fixed end date
-        self.SetCash(self.GetParameter("exec.initial_amount"))
-        self.Debug(f"initial_amount = {self.GetParameter('exec.initial_amount')} with type {type(self.GetParameter('exec.initial_amount'))}")
+        # Note: self.GetParameter always returns a string, so we convert to float
+        initial_amount = float(self.GetParameter("exec.initial_amount"))
+        self.SetCash(initial_amount)
+        self.Debug(f"initial_amount = {initial_amount} with type {type(initial_amount)}")
 
         # 2) Universe Settings
         self.UniverseSettings.Resolution = Resolution.Daily
@@ -29,42 +33,56 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         )
 
         # 5) KellyCriterion for sizing
-        self.kelly = KellyCriterion(factor=float(self.GetParameter("risk.kelly.factor")),
-                                    period=int(self.GetParameter("risk.kelly.period")))
+        self.kelly = KellyCriterion(
+            factor=float(self.GetParameter("risk.kelly.factor")),
+            period=int(self.GetParameter("risk.kelly.period"))
+        )
 
         # 6) short-vol & long-vol lists
         self.highIVSymbols = []
         self.lowIVSymbols  = []
 
-        # We'll store the slice-based OptionChains in OnData
+        # We'll store the slice-based OptionChains in OnData, keyed by the OPTION symbol
+        # Instead of using underlying symbols as the dictionary key.
         self.latestOptionChains = {}
 
         # We'll track the underlying equity symbols that pass Universe selection
         # so we can do AddOption(...) for them.
         self.underlyingSymbols = set()
+        # Create a dictionary for rolling windows of daily returns
+        self.rollingReturns = {}
 
-    # @measure_memory_usage
-    #@monitor_execution
     def OnSecuritiesChanged(self, changes):
         self.Log("OnSecuritiesChanged event")
-        # For each equity security added, also add Option data
         for sec in changes.AddedSecurities:
             if sec.Symbol.SecurityType == SecurityType.Equity:
                 self.Log(f"OnSecuritiesChanged: Adding Option for {sec.Symbol}")
                 option = self.AddOption(sec.Symbol.Value, Resolution.Daily)
-                # Option filter, e.g. near money, expiry < 60 days
-                optional: option.SetFilter(-2, +2, timedelta(0), timedelta(60))
-        # For removed securities, optionally remove or do something
+                option.SetFilter(-2, +2, timedelta(0), timedelta(60))
+                option.PriceModel = OptionPriceModels.CrankNicolsonFD()
+
+                # Create a rolling window of size 30 for each newly added equity
+                if sec.Symbol not in self.rollingReturns:
+                    self.rollingReturns[sec.Symbol] = RollingWindow[float](30)
+
         for sec in changes.RemovedSecurities:
             self.Log(f"Removed security: {sec.Symbol}")
-            # Possibly remove or liquidate positions
+            if sec.Symbol in self.rollingReturns:
+                del self.rollingReturns[sec.Symbol]
 
     def OnData(self, slice):
-        # Keep reference to slice-based OptionChains dictionary
-        self.latestOptionChains = slice.OptionChains
+        # Keep reference to slice-based OptionChains dictionary, but these chains are keyed by the option Symbol
+        # i.e. slice.OptionChains[optionSymbol]
+        self.latestOptionChains = dict(slice.OptionChains)
 
-    # @measure_memory_usage
-    #@monitor_execution
+        # Update rolling returns for each equity
+        for symbol in self.rollingReturns.keys():
+            if symbol in slice.Bars:
+                bar = slice.Bars[symbol]
+                if bar.Open != 0:
+                    dailyReturn = bar.Close / bar.Open - 1.0
+                    self.rollingReturns[symbol].Add(dailyReturn)
+
     def CoarseSelectionFunction(self, coarse):
         filtered = [c for c in coarse
                     if c.Price > int(self.GetParameter("univ.coarse.min_price"))
@@ -77,7 +95,6 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
             return []
         return [x.Symbol for x in top]
 
-    #@monitor_execution
     def FineSelectionFunction(self, fine):
         if not fine:
             self.Log("FineSelectionFunction found no securities.")
@@ -86,7 +103,6 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         self.underlyingSymbols = set([f.Symbol for f in fine])
         return list(self.underlyingSymbols)
 
-    #@monitor_execution
     def RebalanceDaily(self):
         candidateOptions = self.SelectLiquidOptions()
         if not candidateOptions:
@@ -116,7 +132,6 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         self.LiquidateRemovedPositions(shortVolList, longVolList)
         self.BuildDeltaNeutralPositions(shortVolList, longVolList, kellyFraction)
 
-    #@monitor_execution
     def SelectLiquidOptions(self):
         self.Log("SelectLiquidOptions: Using slice-based OptionChains.")
         results = []
@@ -124,11 +139,19 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
             self.Log("SelectLiquidOptions: self.latestOptionChains is empty.")
             return results
 
-        for symbol, chain in self.latestOptionChains.items():
-            # Filter for near expiry (< 45 days), near the money (±5%), decent OI
+        # self.latestOptionChains is keyed by option Symbol, e.g. Symbol("SPY 240119C00475000")
+        # We iterate over them:
+        for optSymbol, chain in self.latestOptionChains.items():
+            # optSymbol is an Option Symbol
+            # chain is the OptionChain object
+            if chain is None:
+                continue
+            if (chain.Underlying is None) or (chain.Underlying.Price <= 0):
+                continue
+
             contracts = [o for o in chain
                          if (o.Expiry - self.Time).days < int(self.GetParameter("algo.option.max_exp_days"))
-                            and abs(o.Strike - chain.Underlying.Price)/chain.Underlying.Price < 0.05
+                            and abs(o.Strike - chain.Underlying.Price)/chain.Underlying.Price < 0.10
                             and o.OpenInterest > int(self.GetParameter("algo.option.min_open_inter"))]
             if not contracts:
                 continue
@@ -138,56 +161,61 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         self.Log(f"SelectLiquidOptions: Found {len(results)} option(s).")
         return results
 
-    #@monitor_execution
     def ComputeIVRankings(self, candidateOptions):
-        """
-        For each option contract, retrieve the contract’s ImpliedVolatility
-        and subtract the underlying's historical volatility to form a 'rank'.
-        """
-        self.Log("ComputeIVRankings: Using actual contract IV and underlying HV.")
+        self.Log("ComputeIVRankings: Using contract.Greeks.ImpliedVolatility from the chain.")
         ivRankList = []
 
-        # In your real code, consider storing a RollingWindow of the underlying’s returns
-        # to compute historical volatility. We'll do a placeholder function below.
-        for sym in candidateOptions:
-            if sym not in self.Securities:
-                self.Log(f"ComputeIVRankings: Security {sym} not found in self.Securities.")
+        # candidateOptions is a list of contract symbols
+        for optSymbol in candidateOptions:
+            # We'll retrieve the chain from self.latestOptionChains by the *option* Symbol
+            chain = self.latestOptionChains.get(optSymbol, None)
+            if chain is None:
+                self.Log(f"ComputeIVRankings: No chain found for {optSymbol.Underlying.Value}.")
                 continue
 
-            optionSecurity = self.Securities[sym]
-            # The Option object’s Greeks property has ImpliedVolatility
-            currentIV = optionSecurity.Greeks.ImpliedVolatility
+            contract = next((c for c in chain if c.Symbol == optSymbol), None)
+            if not contract:
+                self.Log(f"ComputeIVRankings: No matching contract for {optSymbol}.")
+                continue
 
+            if contract.Greeks is None:
+                self.Log(f"ComputeIVRankings: contract.Greeks is None for {optSymbol}.")
+                continue
+
+            currentIV = contract.Greeks.ImpliedVolatility
             if currentIV is None or currentIV <= 0:
-                # Fallback in case there's no valid IV from data
                 currentIV = 0.30
 
-            # Underlying is sym.Underlying
-            underlying = sym.Underlying
-            # We'll compute or retrieve the historical volatility from a placeholder function
-            histVol = self.ComputeHistoricalVol(underlying)
-
-            # The rank is how high the contract's implied vol is relative to underlying’s HV
+            # We'll compute historical vol from the underlying's RollingWindow
+            underlyingSymbol = contract.Underlying.Symbol
+            histVol = self.ComputeHistoricalVol(underlyingSymbol)
             rank = currentIV - histVol
-            ivRankList.append((sym, rank))
+            ivRankList.append((optSymbol, rank))
 
         self.Log(f"ComputeIVRankings: Returning {len(ivRankList)} rank entries.")
         return ivRankList
 
     def ComputeHistoricalVol(self, underlyingSymbol):
         """
-        Placeholder function to compute or retrieve the historical volatility
-        of the underlying stock. Possibly you'd keep a rolling window of
-        daily returns or use self.Securities[underlyingSymbol].VolatilityModel.
-        For demonstration, let's do a naive constant 0.25 HV.
+        Compute the annualized historical volatility from the rolling
+        daily returns window: std(returns) * sqrt(252).
+        Fallback if insufficient data or no rolling window.
         """
-        # e.g. you might do:
-        hv = self.Securities[underlyingSymbol].VolatilityModel.Volatility
-        if hv is None or hv <= 0:
+        if underlyingSymbol not in self.rollingReturns:
+            return 0.25  # fallback
+
+        window = self.rollingReturns[underlyingSymbol]
+        if not window.IsReady:
+            # Not enough data in the rolling window
+            return 0.25
+
+        returnsArray = np.array(list(window))
+        stdev = np.std(returnsArray, ddof=1)
+        hv = stdev * math.sqrt(252)
+        if hv <= 0:
             hv = 0.25
         return hv
 
-    #@monitor_execution
     def LiquidateRemovedPositions(self, shortVolList, longVolList):
         self.Log("LiquidateRemovedPositions: Checking portfolio...")
         keepSymbols = set([x[0] for x in shortVolList] + [x[0] for x in longVolList])
@@ -197,7 +225,6 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
                 self.Log(f"LiquidateRemovedPositions: Liquidating {holding.Symbol}")
                 self.Liquidate(holding.Symbol)
 
-# #@monitor_execution
     def BuildDeltaNeutralPositions(self, shortVolList, longVolList, kellyFraction):
         self.Log("BuildDeltaNeutralPositions: Adjusting positions for delta neutrality.")
         for sym, rank in shortVolList:
@@ -210,7 +237,6 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
                 self.MarketOrder(sym, 1)
         self.Log("BuildDeltaNeutralPositions: Delta hedge logic not yet implemented.")
 
-#@monitor_execution
     def GetRecentDailyReturns(self):
         self.Log("GetRecentDailyReturns: Starting placeholder logic.")
         return [random.uniform(-0.01, 0.01) for _ in range(30)]

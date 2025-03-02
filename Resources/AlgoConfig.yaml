@@ -50,7 +50,7 @@ ALGOS:
     ALGO_NAME: "CrossSectionalImpliedVolatilityMeanReversion"
     ALGO_MAYUS_LETTERS: "CSIVMR"
     ALGO_PUBLIC_NAME: "JFKennedy"
-    ALGO_VERSION: 1
+    ALGO_VERSION: 2
     ALGO_PARAMETRY:
       - ALGO_PARAM_1:
           ALGO_PARAM_1_DEFAULT: 15
