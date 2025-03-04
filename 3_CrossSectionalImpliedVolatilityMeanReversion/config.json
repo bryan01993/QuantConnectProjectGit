@@ -2,9 +2,9 @@
     "algorithm-language": "Python",
     "parameters": {
         "exec.initial_amount" : 100000.00,
-        "exec.start_date": "2024-01-01",
-        "exec.end_date": "2025-01-01",
-        "univ.coarse.final_cut": 20,
+        "exec.start_date": "2023-01-01",
+        "exec.end_date": "2024-01-01",
+        "univ.coarse.final_cut": 100,
         "univ.coarse.min_price": 10,
         "univ.coarse.max_price" : 100,
         "univ.coarse.dollar_volume" : 1000000,

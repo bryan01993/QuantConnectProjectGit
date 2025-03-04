@@ -1,81 +1,79 @@
 from AlgorithmImports import *
 from PropietaryCode.decorators import monitor_execution, measure_memory_usage
 from PropietaryCode.risk_management import KellyCriterion
-from datetime import timedelta
+from datetime import timedelta, datetime
 import math
 import random
 import numpy as np
 
 class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
-
     def Initialize(self):
-        # 1) Basic QC Setup
-        self.SetStartDate(*map(int, self.GetParameter("exec.start_date").split('-')))  # Set a fixed start date
-        self.SetEndDate(*map(int, self.GetParameter("exec.end_date").split('-')))   # Set a fixed end date
-        # Note: self.GetParameter always returns a string, so we convert to float
+        self.SetStartDate(*map(int, self.GetParameter("exec.start_date").split('-')))
+        self.SetEndDate(*map(int, self.GetParameter("exec.end_date").split('-')))
         initial_amount = float(self.GetParameter("exec.initial_amount"))
         self.SetCash(initial_amount)
         self.Debug(f"initial_amount = {initial_amount} with type {type(initial_amount)}")
 
-        # 2) Universe Settings
         self.UniverseSettings.Resolution = Resolution.Daily
+
+        # Track current universe selection
+        self.currentUniverse = []
+        # Only refresh once a week (Monday open)
+        self.nextUniverseSelectionTime = datetime.min
+
         self.AddUniverse(self.CoarseSelectionFunction, self.FineSelectionFunction)
 
-        # 3) Possibly set your brokerage model
-        # self.SetBrokerageModel(BrokerageName.InteractiveBrokersBrokerage, AccountType.Margin)
-
-        # 4) Add SPY to anchor the schedule
-        self.spy = self.AddEquity("SPY", Resolution.Daily).Symbol
+        # Instead of daily, do a weekly schedule for Rebalance
         self.Schedule.On(
-            self.DateRules.EveryDay(self.spy),
-            self.TimeRules.AfterMarketOpen(self.spy, 30),
-            self.RebalanceDaily
+            self.DateRules.WeekStart("SPY"),
+            self.TimeRules.AfterMarketOpen("SPY", 30),
+            self.RebalanceWeekly
         )
 
-        # 5) KellyCriterion for sizing
         self.kelly = KellyCriterion(
             factor=float(self.GetParameter("risk.kelly.factor")),
             period=int(self.GetParameter("risk.kelly.period"))
         )
 
-        # 6) short-vol & long-vol lists
         self.highIVSymbols = []
-        self.lowIVSymbols  = []
-
-        # We'll store the slice-based OptionChains in OnData, keyed by the OPTION symbol
-        # Instead of using underlying symbols as the dictionary key.
+        self.lowIVSymbols = []
         self.latestOptionChains = {}
-
-        # We'll track the underlying equity symbols that pass Universe selection
-        # so we can do AddOption(...) for them.
         self.underlyingSymbols = set()
-        # Create a dictionary for rolling windows of daily returns
         self.rollingReturns = {}
+
+        # Dictionary to track arrival times for each security
+        self.universeArrivalTimes = {}
 
     def OnSecuritiesChanged(self, changes):
         self.Log("OnSecuritiesChanged event")
+
+        # Process additions
         for sec in changes.AddedSecurities:
             if sec.Symbol.SecurityType == SecurityType.Equity:
                 self.Log(f"OnSecuritiesChanged: Adding Option for {sec.Symbol}")
                 option = self.AddOption(sec.Symbol.Value, Resolution.Daily)
-                option.SetFilter(-2, +2, timedelta(0), timedelta(60))
+                option.SetFilter(-2, +2, timedelta(0), timedelta(65))  # up to 65 days expiry
                 option.PriceModel = OptionPriceModels.CrankNicolsonFD()
 
-                # Create a rolling window of size 30 for each newly added equity
+                self.universeArrivalTimes[sec.Symbol] = self.Time  # store arrival time
+
                 if sec.Symbol not in self.rollingReturns:
                     self.rollingReturns[sec.Symbol] = RollingWindow[float](30)
 
+        # Process removals
         for sec in changes.RemovedSecurities:
-            self.Log(f"Removed security: {sec.Symbol}")
+            arrived = self.universeArrivalTimes.pop(sec.Symbol, self.Time)
+            timeInUniverse = (self.Time - arrived).days
+            self.Log(f"Removed security: {sec.Symbol} after {timeInUniverse} day(s) in universe.")
+
             if sec.Symbol in self.rollingReturns:
                 del self.rollingReturns[sec.Symbol]
 
     def OnData(self, slice):
-        # Keep reference to slice-based OptionChains dictionary, but these chains are keyed by the option Symbol
-        # i.e. slice.OptionChains[optionSymbol]
         self.latestOptionChains = dict(slice.OptionChains)
+        self.Debug(f"OnData: slice.OptionChains count = {len(self.latestOptionChains)}")
 
-        # Update rolling returns for each equity
+        # Update rolling returns if we have daily Bars
         for symbol in self.rollingReturns.keys():
             if symbol in slice.Bars:
                 bar = slice.Bars[symbol]
@@ -83,27 +81,59 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
                     dailyReturn = bar.Close / bar.Open - 1.0
                     self.rollingReturns[symbol].Add(dailyReturn)
 
+    # WEEKLY Universe selection:
     def CoarseSelectionFunction(self, coarse):
-        filtered = [c for c in coarse
-                    if c.Price > int(self.GetParameter("univ.coarse.min_price"))
-                    and c.Price < int(self.GetParameter("univ.coarse.max_price"))
-                    and c.DollarVolume > int(self.GetParameter("univ.coarse.dollar_volume"))
+        # Only refresh if we are past the nextUniverseSelectionTime
+        if self.Time < self.nextUniverseSelectionTime:
+            # return the unchanged universe
+            return self.currentUniverse
+
+        # Otherwise, we do our standard coarse selection
+        self.nextUniverseSelectionTime = self.Time + timedelta(days=7)  # next week
+        coarse_list = list(coarse)
+        min_price = int(self.GetParameter("univ.coarse.min_price"))
+        max_price = int(self.GetParameter("univ.coarse.max_price"))
+        min_vol   = int(self.GetParameter("univ.coarse.dollar_volume"))
+        final_cut = int(self.GetParameter("univ.coarse.final_cut"))
+
+        self.Log(f"Coarse count = {len(coarse_list)}. min_price={min_price}, max_price={max_price}, "
+                 f"min_vol={min_vol}, final_cut={final_cut}")
+
+        filtered = [c for c in coarse_list
+                    if c.Price > min_price
+                    and c.Price < max_price
+                    and c.DollarVolume > min_vol
                     and c.HasFundamentalData]
-        top = sorted(filtered, key=lambda c: c.DollarVolume, reverse=True)[:int(self.GetParameter("univ.coarse.final_cut"))]
+
+        self.Log(f"CoarseSelectionFunction: after filter has {len(filtered)} left")
+
+        top = sorted(filtered, key=lambda c: c.DollarVolume, reverse=True)[:final_cut]
+        self.Log(f"CoarseSelectionFunction: returning top {len(top)} by dollar volume")
+
         if not top:
             self.Log("CoarseSelectionFunction returned empty.")
+            self.currentUniverse = []
             return []
-        return [x.Symbol for x in top]
+
+        # store in self.currentUniverse for subsequent days
+        self.currentUniverse = [x.Symbol for x in top]
+        return self.currentUniverse
 
     def FineSelectionFunction(self, fine):
-        if not fine:
+        fine_list = list(fine)
+        self.Log(f"FineSelectionFunction: got {len(fine_list)} items in fine filter")
+        if not fine_list:
             self.Log("FineSelectionFunction found no securities.")
             return []
-        # We'll store these equity symbols so we can AddOption for them
-        self.underlyingSymbols = set([f.Symbol for f in fine])
+
+        # For demonstration let's just keep them all. Or we can do further filtering.
+        self.underlyingSymbols = set([f.Symbol for f in fine_list])
+        self.Log(f"FineSelectionFunction returning {len(self.underlyingSymbols)} symbol(s).")
         return list(self.underlyingSymbols)
 
-    def RebalanceDaily(self):
+    # We have renamed this to RebalanceWeekly
+    def RebalanceWeekly(self):
+        self.Debug("=== RebalanceWeekly triggered ===")
         candidateOptions = self.SelectLiquidOptions()
         if not candidateOptions:
             self.Debug("SelectLiquidOptions returned no candidates; skipping.")
@@ -127,7 +157,7 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         historicalReturns = self.GetRecentDailyReturns()
         self.kelly.Update(historicalReturns)
         kellyFraction = self.kelly.GetFraction()
-        self.Log(f"RebalanceDaily: kellyFraction = {kellyFraction}")
+        self.Log(f"RebalanceWeekly: kellyFraction = {kellyFraction}")
 
         self.LiquidateRemovedPositions(shortVolList, longVolList)
         self.BuildDeltaNeutralPositions(shortVolList, longVolList, kellyFraction)
@@ -139,23 +169,31 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
             self.Log("SelectLiquidOptions: self.latestOptionChains is empty.")
             return results
 
-        # self.latestOptionChains is keyed by option Symbol, e.g. Symbol("SPY 240119C00475000")
-        # We iterate over them:
+        max_exp = int(self.GetParameter("algo.option.max_exp_days"))
+        min_oi  = int(self.GetParameter("algo.option.min_open_inter"))
+        self.Log(f"SelectLiquidOptions: checking for expiry < {max_exp} days, open interest > {min_oi}")
+
         for optSymbol, chain in self.latestOptionChains.items():
-            # optSymbol is an Option Symbol
-            # chain is the OptionChain object
             if chain is None:
                 continue
             if (chain.Underlying is None) or (chain.Underlying.Price <= 0):
                 continue
 
-            contracts = [o for o in chain
-                         if (o.Expiry - self.Time).days < int(self.GetParameter("algo.option.max_exp_days"))
-                            and abs(o.Strike - chain.Underlying.Price)/chain.Underlying.Price < 0.10
-                            and o.OpenInterest > int(self.GetParameter("algo.option.min_open_inter"))]
-            if not contracts:
+            contracts_list = list(chain)
+            self.Debug(f" - OptionChain {optSymbol.Underlying.Value} has {len(contracts_list)} contracts total.")
+
+            candidate_contracts = []
+            for o in chain:
+                expiryDays = (o.Expiry - self.Time).days
+                strikePerc = abs(o.Strike - chain.Underlying.Price) / chain.Underlying.Price
+                if expiryDays < max_exp and strikePerc < 0.10 and o.OpenInterest > min_oi:
+                    candidate_contracts.append(o)
+
+            if not candidate_contracts:
+                self.Debug(f"   chain for {optSymbol.Underlying.Value} - no contracts pass the filter.")
                 continue
-            bestContract = sorted(contracts, key=lambda x: x.OpenInterest, reverse=True)[0]
+
+            bestContract = sorted(candidate_contracts, key=lambda x: x.OpenInterest, reverse=True)[0]
             results.append(bestContract.Symbol)
 
         self.Log(f"SelectLiquidOptions: Found {len(results)} option(s).")
@@ -164,10 +202,7 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
     def ComputeIVRankings(self, candidateOptions):
         self.Log("ComputeIVRankings: Using contract.Greeks.ImpliedVolatility from the chain.")
         ivRankList = []
-
-        # candidateOptions is a list of contract symbols
         for optSymbol in candidateOptions:
-            # We'll retrieve the chain from self.latestOptionChains by the *option* Symbol
             chain = self.latestOptionChains.get(optSymbol, None)
             if chain is None:
                 self.Log(f"ComputeIVRankings: No chain found for {optSymbol.Underlying.Value}.")
@@ -186,7 +221,6 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
             if currentIV is None or currentIV <= 0:
                 currentIV = 0.30
 
-            # We'll compute historical vol from the underlying's RollingWindow
             underlyingSymbol = contract.Underlying.Symbol
             histVol = self.ComputeHistoricalVol(underlyingSymbol)
             rank = currentIV - histVol
@@ -196,17 +230,11 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         return ivRankList
 
     def ComputeHistoricalVol(self, underlyingSymbol):
-        """
-        Compute the annualized historical volatility from the rolling
-        daily returns window: std(returns) * sqrt(252).
-        Fallback if insufficient data or no rolling window.
-        """
         if underlyingSymbol not in self.rollingReturns:
-            return 0.25  # fallback
+            return 0.25
 
         window = self.rollingReturns[underlyingSymbol]
         if not window.IsReady:
-            # Not enough data in the rolling window
             return 0.25
 
         returnsArray = np.array(list(window))
@@ -235,7 +263,7 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
             if not self.Portfolio[sym].Invested:
                 self.Log(f"LongVol {sym.Value} rank={rank:.3f}. Opening long call position.")
                 self.MarketOrder(sym, 1)
-        self.Log("BuildDeltaNeutralPositions: Delta hedge logic not yet implemented.")
+        self.Log("BuildDeltaNeutralPositions: (Simple) Delta hedge logic not implemented yet.")
 
     def GetRecentDailyReturns(self):
         self.Log("GetRecentDailyReturns: Starting placeholder logic.")
