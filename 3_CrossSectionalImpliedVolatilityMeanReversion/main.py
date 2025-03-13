@@ -49,13 +49,14 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         # For each equity security added, also add Option data
         for sec in changes.AddedSecurities:
             if sec.Symbol.SecurityType == SecurityType.Equity:
-                self.Log(f"OnSecuritiesChanged: Adding Option for {sec.Symbol}")
+                # self.Log(f"OnSecuritiesChanged: Adding Option for {sec.Symbol}")
                 option = self.AddOption(sec.Symbol.Value, Resolution.Daily)
                 # Option filter, e.g. near money, expiry < 60 days
                 optional: option.SetFilter(-2, +2, timedelta(0), timedelta(60))
         # For removed securities, optionally remove or do something
         for sec in changes.RemovedSecurities:
-            self.Log(f"Removed security: {sec.Symbol}")
+          pass
+            # self.Log(f"Removed security: {sec.Symbol}")
             # Possibly remove or liquidate positions
 
     def OnData(self, slice):
@@ -66,15 +67,15 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
     #@monitor_execution
     def CoarseSelectionFunction(self, coarse):
         filtered = [c for c in coarse
-                    if c.Price > int(self.GetParameter("univ.coarse.min_price"))
-                    and c.Price < int(self.GetParameter("univ.coarse.max_price"))
+                    if int(self.GetParameter("univ.coarse.min_price")) < c.Price < int(self.GetParameter("univ.coarse.max_price"))
                     and c.DollarVolume > int(self.GetParameter("univ.coarse.dollar_volume"))
-                    and c.HasFundamentalData]
+                    and c.HasFundamentalData
+                    and c.Symbol.Value not in ['OTC', 'PINK', 'OTHER']]  # Filter out OTC and other illiquid symbols
         top = sorted(filtered, key=lambda c: c.DollarVolume, reverse=True)[:int(self.GetParameter("univ.coarse.final_cut"))]
         if not top:
             self.Log("CoarseSelectionFunction returned empty.")
             return []
-        return [x.Symbol for x in top]
+        return [x.Symbol for x in top] if top else []
 
     #@monitor_execution
     def FineSelectionFunction(self, fine):
@@ -87,6 +88,7 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
 
     #@monitor_execution
     def RebalanceDaily(self):
+        self.LiquidateExpiringOptions()
         candidateOptions = self.SelectLiquidOptions()
         if not candidateOptions:
             self.Debug("SelectLiquidOptions returned no candidates; skipping.")
@@ -153,25 +155,41 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
     #@monitor_execution
     def LiquidateRemovedPositions(self, shortVolList, longVolList):
         self.Log("LiquidateRemovedPositions: Checking portfolio...")
-        keepSymbols = set([x[0] for x in shortVolList] + [x[0] for x in longVolList])
-        for kvp in self.Portfolio:
-            holding = kvp.Value
+        keepSymbols = {x[0] for x in shortVolList} | {x[0] for x in longVolList}
+        for holding in self.Portfolio.values():
             if holding.Invested and holding.Symbol not in keepSymbols:
                 self.Log(f"LiquidateRemovedPositions: Liquidating {holding.Symbol}")
                 self.Liquidate(holding.Symbol)
 
-    # #@monitor_execution
+    #@monitor_execution
+    def LiquidateExpiringOptions(self):
+        self.Log("Checking for options expiring within 13 days.")
+        for holding in list(self.Portfolio.Values):
+            if holding.Invested and holding.Symbol.SecurityType == SecurityType.Option:
+                expiry = holding.Symbol.ID.Date
+                daysToExpiry = (expiry.date() - self.Time.date()).days
+                if daysToExpiry <= 13:
+                    self.Log(f"Liquidating expiring option: {holding.Symbol} with {daysToExpiry} days left.")
+                    self.Liquidate(holding.Symbol)
+
     def BuildDeltaNeutralPositions(self, shortVolList, longVolList, kellyFraction):
-        self.Log("BuildDeltaNeutralPositions: Adjusting positions for delta neutrality.")
-        for sym, rank in shortVolList:
-            if not self.Portfolio[sym].Invested:
-                self.Log(f"ShortVol {sym.Value} rank={rank:.3f}. Opening short call position.")
-                self.MarketOrder(sym, -1)
-        for sym, rank in longVolList:
-            if not self.Portfolio[sym].Invested:
-                self.Log(f"LongVol {sym.Value} rank={rank:.3f}. Opening long call position.")
-                self.MarketOrder(sym, 1)
-        self.Log("BuildDeltaNeutralPositions: Delta hedge logic not yet implemented.")
+        if shortVolList and longVolList:
+            self.Log("BuildDeltaNeutralPositions: Adjusting positions for delta neutrality.")
+            for sym, rank in shortVolList:
+                if not self.Portfolio[sym].Invested:
+                    self.MarketOrder(sym, -1)
+                    self.Log(f"ShortVol {sym.Value} rank={rank:.3f}. Opening short call position.")
+                    self.MarketOrder(sym.Underlying, 100)
+                    self.Log(f"Long 100 {sym.Underlying} stocks.")
+
+            for sym, rank in longVolList:
+                if not self.Portfolio[sym].Invested:
+                    self.MarketOrder(sym, 1)
+                    self.Log(f"LongVol {sym.Value} rank={rank:.3f}. Opening long call position.")
+                    self.MarketOrder(sym.Underlying, -100)
+                    self.Log(f"Short -100 {sym.Underlying} stocks.")
+        else:
+            self.Log(f"BuildDeltaNeutralPositions: short {len(shortVolList)} and long {len(longVolList)}.")
 
     #@monitor_execution
     def GetRecentDailyReturns(self):
