@@ -3,195 +3,277 @@ from PropietaryCode.decorators import monitor_execution, measure_memory_usage
 from PropietaryCode.risk_management import KellyCriterion
 from datetime import timedelta
 import random
+import System
+import gc
+import sys
+
 
 class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
 
     def Initialize(self):
-        # 1) Basic QC Setup
-        self.SetStartDate(*map(int, self.GetParameter("exec.start_date").split('-')))  # Set a fixed start date
-        self.SetEndDate(*map(int, self.GetParameter("exec.end_date").split('-')))   # Set a fixed end date
+        self.option_to_equity_map = {}  # Track equity hedges tied to open options
+        self.SetStartDate(*map(int, self.GetParameter("exec.start_date").split('-')))
+        self.SetEndDate(*map(int, self.GetParameter("exec.end_date").split('-')))
         self.SetCash(self.GetParameter("exec.initial_amount"))
-        self.Debug(f"initial_amount = {self.GetParameter('exec.initial_amount')} with type {type(self.GetParameter('exec.initial_amount'))}")
+        self.Debug(
+            f"initial_amount = {self.GetParameter('exec.initial_amount')} with type {type(self.GetParameter('exec.initial_amount'))}")
 
-        # 2) Universe Settings
-        self.UniverseSettings.Resolution = Resolution.Daily
+        self.UniverseSettings.Resolution = Resolution.HOUR
         self.AddUniverse(self.CoarseSelectionFunction, self.FineSelectionFunction)
+        self.SetBrokerageModel(BrokerageName.InteractiveBrokersBrokerage)
 
-        # 3) Possibly set your brokerage model
-        # self.SetBrokerageModel(BrokerageName.InteractiveBrokersBrokerage, AccountType.Margin)
+        self.spy = self.AddEquity("SPY", Resolution.HOUR).Symbol
+        # Scheduling removed. Rebalance will be triggered in OnData if ready
 
-        # 4) Add SPY to anchor the schedule
-        self.spy = self.AddEquity("SPY", Resolution.Daily).Symbol
-        self.Schedule.On(
-            self.DateRules.EveryDay(self.spy),
-            self.TimeRules.AfterMarketOpen(self.spy, 30),
-            self.RebalanceDaily
-        )
-
-        # 5) KellyCriterion for sizing
         self.kelly = KellyCriterion(factor=float(self.GetParameter("risk.kelly.factor")),
                                     period=int(self.GetParameter("risk.kelly.period")))
 
-        # 6) short-vol & long-vol lists
+        self.SetWarmUp(timedelta(days=35))  # Only 35 days
         self.highIVSymbols = []
-        self.lowIVSymbols  = []
-
-        # We'll store the slice-based OptionChains in OnData
+        self.lowIVSymbols = []
         self.latestOptionChains = {}
-
-        # We'll track the underlying equity symbols that pass Universe selection
-        # so we can do AddOption(...) for them.
         self.underlyingSymbols = set()
+        self.iv_history = {}  # Store implied volatility history per symbol
+        self.lastRebalanceDate = None
 
-    #@monitor_execution
     def OnSecuritiesChanged(self, changes):
-        self.Log("OnSecuritiesChanged event")
-        # For each equity security added, also add Option data
+        # self.Debug(f"OnSecuritiesChanged: {len(changes.AddedSecurities)} added, {len(changes.RemovedSecurities)} removed")
         for sec in changes.AddedSecurities:
             if sec.Symbol.SecurityType == SecurityType.Equity:
-                # self.Log(f"OnSecuritiesChanged: Adding Option for {sec.Symbol}")
+                # self.Debug(f"Adding Option for: {sec.Symbol.Value}")
                 option = self.AddOption(sec.Symbol.Value, Resolution.Daily)
-                # Option filter, e.g. near money, expiry < 60 days
-                optional: option.SetFilter(-2, +2, timedelta(0), timedelta(60))
-        # For removed securities, optionally remove or do something
+                option.SetFilter(-2, +2,
+                                 timedelta(int(self.GetParameter("algo.option.min_exp_days"))),
+                                 timedelta(int(self.GetParameter("algo.option.max_exp_days"))))
+
         for sec in changes.RemovedSecurities:
-          pass
-            # self.Log(f"Removed security: {sec.Symbol}")
-            # Possibly remove or liquidate positions
+            # if sec.Symbol.SecurityType == SecurityType.Equity:
+            self.Debug(f"Removing Security: {sec.Symbol.Value}")
+            #     self.RemoveSecurity(sec.Symbol)
 
     def OnData(self, slice):
-        # Keep reference to slice-based OptionChains dictionary
-        self.latestOptionChains = slice.OptionChains
+        self.latestOptionChains.clear()
+        self.latestOptionChains.update(slice.OptionChains)
+        # Only trigger RebalanceDaily when option chains are present and it's around 10:00 AM
 
-    # @measure_memory_usage
-    #@monitor_execution
+        if (self.Time.hour >= 10 and self.Time.date() != self.lastRebalanceDate
+                and self.latestOptionChains):
+            self.Debug(f"Triggering RebalanceDaily at {self.Time} with {len(self.latestOptionChains)} chains.")
+            self.RebalanceDaily()
+            self.lastRebalanceDate = self.Time.date()
+        elif (self.Time.hour >= 15 and self.latestOptionChains):
+            self.Debug(f"Triggering RebalanceDaily at {self.Time} with {len(self.latestOptionChains)} chains.")
+            self.RebalanceDaily()
+            self.lastRebalanceDate = self.Time.date()
+
     def CoarseSelectionFunction(self, coarse):
-        filtered = [c for c in coarse
-                    if int(self.GetParameter("univ.coarse.min_price")) < c.Price < int(self.GetParameter("univ.coarse.max_price"))
-                    and c.DollarVolume > int(self.GetParameter("univ.coarse.dollar_volume"))
-                    and c.HasFundamentalData
-                    and c.Symbol.Value not in ['OTC', 'PINK', 'OTHER']]  # Filter out OTC and other illiquid symbols
-        top = sorted(filtered, key=lambda c: c.DollarVolume, reverse=True)[:int(self.GetParameter("univ.coarse.final_cut"))]
-        if not top:
-            self.Log("CoarseSelectionFunction returned empty.")
-            return []
+        min_price = int(self.GetParameter("univ.coarse.min_price"))
+        max_price = int(self.GetParameter("univ.coarse.max_price"))
+        dollar_volume = int(self.GetParameter("univ.coarse.dollar_volume"))
+        final_cut = int(self.GetParameter("univ.coarse.final_cut"))
+
+        filtered = (c for c in coarse if
+                    min_price < c.Price < max_price and c.DollarVolume > dollar_volume and c.HasFundamentalData)
+        top = sorted(filtered, key=lambda c: c.DollarVolume, reverse=True)[:final_cut]
+        # self.Debug(f"CoarseSelectionFunction selected {len(top)} symbols.")
         return [x.Symbol for x in top] if top else []
 
-    #@monitor_execution
     def FineSelectionFunction(self, fine):
         if not fine:
-            self.Log("FineSelectionFunction found no securities.")
             return []
-        # We'll store these equity symbols so we can AddOption for them
-        self.underlyingSymbols = set([f.Symbol for f in fine])
-        return list(self.underlyingSymbols)
+        self.underlyingSymbols = {f.Symbol for f in fine}
+        return list(set([x.Symbol for x in fine]) - set(self.Securities.Keys))
 
-    #@monitor_execution
     def RebalanceDaily(self):
+        # Log non-tradable securities with context
+        self.non_tradable_details = []
+        self.tradable_details = []
+        for symbol, sec in self.Securities.items():
+            if not sec.IsTradable:
+                detail = f"{symbol.Value} | Tradable: {sec.IsTradable}, Delisted: {sec.IsDelisted}, Price: {sec.Price}, Holdings: {sec.Holdings.Quantity}, ExtendedHours: {sec.IsExtendedMarketHours}, FillForward: {sec.IsFillDataForward}, Type: {sec.Type}"
+                self.non_tradable_details.append(detail)
+        for symbol, sec in self.Securities.items():
+            if sec.IsTradable:
+                tradable_detail = f"{symbol.Value} | Tradable: {sec.IsTradable}, Delisted: {sec.IsDelisted}, Price: {sec.Price}, Holdings: {sec.Holdings.Quantity}, ExtendedHours: {sec.IsExtendedMarketHours}, FillForward: {sec.IsFillDataForward}, Type: {sec.Type}"
+                self.tradable_details.append(tradable_detail)
+        # self.Debug("RebalanceDaily triggered.")
         self.LiquidateExpiringOptions()
+
         candidateOptions = self.SelectLiquidOptions()
+        self.Debug(f"SelectLiquidOptions returned {len(candidateOptions)} candidates.")
         if not candidateOptions:
-            self.Debug("SelectLiquidOptions returned no candidates; skipping.")
             return
 
         ivRanks = self.ComputeIVRankings(candidateOptions)
+        self.Debug(f"ComputeIVRankings returned {len(ivRanks)} ranks.")
         if not ivRanks:
-            self.Debug("ComputeIVRankings returned empty; skipping.")
             return
 
         topN = 5
         shortVolList = sorted(ivRanks, key=lambda x: x[1], reverse=True)[:topN]
-        longVolList  = sorted(ivRanks, key=lambda x: x[1])[:topN]
-        if not shortVolList and not longVolList:
-            self.Debug("No valid IV rank candidates. Skipping.")
-            return
+        longVolList = sorted(ivRanks, key=lambda x: x[1])[:topN]
+
+        self.Debug(f"ShortVolList: {[s[0].Value for s in shortVolList]}")
+        self.Debug(f"LongVolList: {[s[0].Value for s in longVolList]}")
 
         self.highIVSymbols = [x[0] for x in shortVolList]
-        self.lowIVSymbols  = [x[0] for x in longVolList]
+        self.lowIVSymbols = [x[0] for x in longVolList]
 
         historicalReturns = self.GetRecentDailyReturns()
         self.kelly.Update(historicalReturns)
         kellyFraction = self.kelly.GetFraction()
-        self.Log(f"RebalanceDaily: kellyFraction = {kellyFraction}")
+        self.Debug(f"Kelly Fraction: {kellyFraction:.4f}")
 
         self.LiquidateRemovedPositions(shortVolList, longVolList)
         self.BuildDeltaNeutralPositions(shortVolList, longVolList, kellyFraction)
 
-    #@monitor_execution
-    def SelectLiquidOptions(self):
-        self.Log("SelectLiquidOptions: Using slice-based OptionChains.")
+    def SelectLiquidOptions(self, optionChains=None):
         results = []
-        if not self.latestOptionChains:
-            self.Log("SelectLiquidOptions: self.latestOptionChains is empty.")
+        chains = optionChains or self.latestOptionChains
+        if not chains:
             return results
 
-        for symbol, chain in self.latestOptionChains.items():
-            # Filter for near expiry (< 45 days), near the money (±5%), decent OI
-            contracts = [o for o in chain
-                         if (o.Expiry - self.Time).days < int(self.GetParameter("algo.option.max_exp_days"))
-                            and abs(o.Strike - chain.Underlying.Price)/chain.Underlying.Price < 0.05
-                            and o.OpenInterest > int(self.GetParameter("algo.option.min_open_inter"))]
-            if not contracts:
-                continue
-            bestContract = sorted(contracts, key=lambda x: x.OpenInterest, reverse=True)[0]
-            results.append(bestContract.Symbol)
+        max_exp_days = int(self.GetParameter("algo.option.max_exp_days"))
+        min_open_inter = int(self.GetParameter("algo.option.min_open_inter"))
 
-        self.Log(f"SelectLiquidOptions: Found {len(results)} option(s).")
+        for symbol, chain in chains.items():
+            underlying_price = chain.Underlying.Price
+            if underlying_price == 0:
+                continue  # Avoid divide-by-zero error
+
+            contracts = [o for o in chain
+                         if (o.Expiry - self.Time).days < max_exp_days
+                         and abs(o.Strike - underlying_price) / underlying_price < 0.05
+                         and o.OpenInterest > min_open_inter]
+            if contracts:
+                bestContract = max(contracts, key=lambda x: x.OpenInterest)
+                results.append(bestContract)
         return results
 
-    #@monitor_execution
     def ComputeIVRankings(self, candidateOptions):
-        self.Log("ComputeIVRankings: Starting placeholder logic.")
-        random.seed(42)
-        ivRankList = []
-        for sym in candidateOptions:
-            currentIV = random.uniform(0.2, 0.6)
-            historicalMeanIV = 0.3
-            rank = currentIV - historicalMeanIV
-            ivRankList.append((sym, rank))
-        self.Log(f"ComputeIVRankings: Returning {len(ivRankList)} rank entries.")
-        return ivRankList
+        iv_values = []
+        iv_ranks = []
 
-    #@monitor_execution
+        for contract in candidateOptions:
+            option_symbol = contract.Symbol
+            current_iv = contract.ImpliedVolatility
+
+            if current_iv is None or current_iv == 0:
+                continue
+
+            if option_symbol not in self.iv_history:
+                self.iv_history[option_symbol] = []
+
+            self.iv_history[option_symbol].append(current_iv)
+
+            window_size = 30
+            history = self.iv_history[option_symbol][-window_size:]
+
+            if len(history) < 25:
+                continue
+
+            highest_iv = max(history)
+            lowest_iv = min(history)
+            rank = sum(1 for v in history if v <= current_iv) / len(history)
+
+            # self.Debug(f"IV Debug: symbol={option_symbol.Value}, high={highest_iv:.3f}, low={lowest_iv:.3f}, current={current_iv:.3f}, percentile={rank:.3f}")
+
+            iv_values.append(current_iv)
+
+            # Only include options meeting directional criteria
+            if rank >= 0.8 or rank <= 0.2:
+                iv_ranks.append((option_symbol, rank))
+
+                # Plot average IV of the day
+        if iv_values:
+            avg_iv = np.mean(iv_values)
+            self.Plot("IV Summary", "Average IV", avg_iv)
+
+        return iv_ranks
+
     def LiquidateRemovedPositions(self, shortVolList, longVolList):
-        self.Log("LiquidateRemovedPositions: Checking portfolio...")
-        keepSymbols = {x[0] for x in shortVolList} | {x[0] for x in longVolList}
-        for holding in self.Portfolio.values():
-            if holding.Invested and holding.Symbol not in keepSymbols:
-                self.Log(f"LiquidateRemovedPositions: Liquidating {holding.Symbol}")
+        option_symbols_to_keep = {x[0] for x in shortVolList} | {x[0] for x in longVolList}
+        equity_symbols_to_keep = {sym.Underlying for sym in option_symbols_to_keep if sym.HasUnderlying}
+        all_symbols_to_keep = option_symbols_to_keep | equity_symbols_to_keep
+        # already handled above
+        for holding in list(self.Portfolio.Values):
+            if holding.Invested and holding.Symbol not in all_symbols_to_keep:
+                self.Debug(f"Liquidating removed position: {holding.Symbol}")
                 self.Liquidate(holding.Symbol)
 
-    #@monitor_execution
     def LiquidateExpiringOptions(self):
-        self.Log("Checking for options expiring within 13 days.")
         for holding in list(self.Portfolio.Values):
             if holding.Invested and holding.Symbol.SecurityType == SecurityType.Option:
                 expiry = holding.Symbol.ID.Date
-                daysToExpiry = (expiry.date() - self.Time.date()).days
-                if daysToExpiry <= 13:
-                    self.Log(f"Liquidating expiring option: {holding.Symbol} with {daysToExpiry} days left.")
+                if (expiry.date() - self.Time.date()).days <= 13:
                     self.Liquidate(holding.Symbol)
 
     def BuildDeltaNeutralPositions(self, shortVolList, longVolList, kellyFraction):
-        if shortVolList and longVolList:
-            self.Log("BuildDeltaNeutralPositions: Adjusting positions for delta neutrality.")
-            for sym, rank in shortVolList:
-                if not self.Portfolio[sym].Invested:
-                    self.MarketOrder(sym, -1)
-                    self.Log(f"ShortVol {sym.Value} rank={rank:.3f}. Opening short call position.")
-                    self.MarketOrder(sym.Underlying, 100)
-                    self.Log(f"Long 100 {sym.Underlying} stocks.")
+        used_equities = set()
+        # self.Debug(f"Entering BuildDeltaNeutralPositions with {len(shortVolList)} shorts and {len(longVolList)} longs.")
 
-            for sym, rank in longVolList:
-                if not self.Portfolio[sym].Invested:
-                    self.MarketOrder(sym, 1)
-                    self.Log(f"LongVol {sym.Value} rank={rank:.3f}. Opening long call position.")
-                    self.MarketOrder(sym.Underlying, -100)
-                    self.Log(f"Short -100 {sym.Underlying} stocks.")
-        else:
-            self.Log(f"BuildDeltaNeutralPositions: short {len(shortVolList)} and long {len(longVolList)}.")
+        for sym, rank in shortVolList:
+            equity = sym.Underlying
+            underlying_str = equity.Value
+            equity_symbol = equity.Value
+            the_securities = self.Securities
+            self.Debug(f"Checking if {equity_symbol} exists in Securities: {equity_symbol in self.Securities}")
+            if equity_symbol not in self.Securities:
+                self.Debug(f"Adding missing equity for short hedge: {underlying_str}")
+                equity_symbol = self.AddEquity(underlying_str, Resolution.Daily).Symbol
 
-    #@monitor_execution
+            if self.Portfolio[sym].Invested:
+                self.Debug(f"Already invested in option {sym.Value}, skipping short.")
+                continue
+            if self.Portfolio[equity_symbol].Invested:
+                self.Debug(f"Already invested in equity {equity_symbol}, skipping hedge.")
+                continue
+            if equity_symbol in used_equities:
+                self.Debug(f"Equity {equity_symbol} already used for another hedge.")
+                continue
+            if not self.Securities[equity_symbol].IsTradable:
+                self.Debug(f"Symbol {equity_symbol} is not {self.Securities[equity_symbol].IsTradable}. Skipping.")
+                continue
+
+            short_vol_opt_order = self.MarketOrder(sym, -1)
+            if sym.ID.OptionRight == OptionRight.Call:
+                short_vol_stk_order = self.MarketOrder(equity_symbol, 100)
+            else:
+                short_vol_stk_order = self.MarketOrder(equity_symbol, -100)
+            self.Debug(f"ShortVol {sym.Value} rank={rank:.3f}. Opening short call + long stock.")
+            used_equities.add(equity_symbol)
+
+        for sym, rank in longVolList:
+            equity = sym.Underlying
+            underlying_str = equity.Value
+            equity_symbol = equity.Value
+
+            if equity_symbol not in self.Securities:
+                self.Debug(f"Adding missing equity for long hedge: {underlying_str}")
+                equity_symbol = self.AddEquity(underlying_str, Resolution.Daily).Symbol
+
+            if self.Portfolio[sym].Invested:
+                self.Debug(f"Already invested in option {sym.Value}, skipping long.")
+                continue
+            if self.Portfolio[equity_symbol].Invested:
+                self.Debug(f"Already invested in equity {equity_symbol}, skipping hedge.")
+                continue
+            if equity_symbol in used_equities:
+                self.Debug(f"Equity {equity_symbol} already used for another hedge.")
+                continue
+            if not self.Securities[equity_symbol].IsTradable:
+                self.Debug(f"Symbol {equity_symbol} is not {self.Securities[equity_symbol].IsTradable}. Skipping.")
+                continue
+
+            long_vol_opt_order = self.MarketOrder(sym, 1)
+            if sym.ID.OptionRight == OptionRight.Call:
+                long_vol_stk_order = self.MarketOrder(equity_symbol, -100)
+            else:
+                long_vol_stk_order = self.MarketOrder(equity_symbol, 100)
+
+            self.Debug(f"LongVol {sym.Value} rank={rank:.3f}. Opening long call + short stock.")
+            used_equities.add(equity_symbol)
+
+
     def GetRecentDailyReturns(self):
-        self.Log("GetRecentDailyReturns: Starting placeholder logic.")
         return [random.uniform(-0.01, 0.01) for _ in range(30)]
