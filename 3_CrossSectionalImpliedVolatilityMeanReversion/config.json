@@ -1,20 +1,20 @@
 {
     "algorithm-language": "Python",
     "parameters": {
-        "exec.initial_amount" : 100000.00,
+        "exec.initial_amount": "100000.0",
         "exec.start_date": "2023-01-01",
         "exec.end_date": "2024-01-01",
-        "univ.coarse.final_cut": 10,
-        "univ.coarse.min_price": 10,
-        "univ.coarse.max_price" : 100,
-        "univ.coarse.dollar_volume" : 1000000,
-        "risk.kelly.factor": 0.5,
-        "risk.kelly.period" : 30,
-        "algo.option.upper_filter" : "+2",
-        "algo.option.lower_filter" : "-2",
-        "algo.option.max_exp_days": 95,
-        "algo.option.min_exp_days": 25,
-        "algo.option.min_open_inter": 10
+        "univ.coarse.final_cut": "10",
+        "univ.coarse.min_price": "10",
+        "univ.coarse.max_price": "100",
+        "univ.coarse.dollar_volume": "1000000",
+        "risk.kelly.factor": "0.5",
+        "risk.kelly.period": "30",
+        "algo.option.upper_filter": "+2",
+        "algo.option.lower_filter": "-2",
+        "algo.option.max_exp_days": "95",
+        "algo.option.min_exp_days": "25",
+        "algo.option.min_open_inter": "10"
     },
     "description": "Self mean reversion in option vs stock volatility trade.",
     "libraries": [
@@ -24,5 +24,7 @@
         }
     ],
     "cloud-id": 21565345,
-    "organization-id": "6bfd78b1c53c2e682ab8f3635d854f13"
+    "organization-id": "6bfd78b1c53c2e682ab8f3635d854f13",
+    "python-venv": 1,
+    "encrypted": false
 }

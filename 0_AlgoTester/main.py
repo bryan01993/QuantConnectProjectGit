@@ -7,7 +7,7 @@ from datetime import timedelta, datetime
 # endregion
 
 class AlgoTester(QCAlgorithm):
-    def Initialize(self) -> None:
+    def Initialize(self):
 
         self.SetStartDate(*map(int, self.GetParameter("exec.start_date").split('-')))  # Set a fixed start date
         self.SetEndDate(*map(int, self.GetParameter("exec.end_date").split('-')))  # Set a fixed end date
@@ -49,7 +49,7 @@ class AlgoTester(QCAlgorithm):
 
         self.Schedule.On(self.DateRules.EveryDay(self.spy), self.TimeRules.At(9, 31), self.CheckOptionExpiration)
 
-    def OnData(self, data: Slice):
+    def OnData(self, data):
         if self.spy in data and data[self.spy] is not None and data[self.spy].Close is not None:
             if not self.Portfolio[self.spy].Invested:
                 self.MarketOrder(self.spy, int(1000 / data[self.spy].Close))
@@ -66,11 +66,11 @@ class AlgoTester(QCAlgorithm):
             self.next_option_trade = self.Time + timedelta(weeks=4)  # Next trade in 1 month
 
     @monitor_execution
-    def OptionFilter(self, universe: OptionFilterUniverse) -> OptionFilterUniverse:
+    def OptionFilter(self, universe):
         return universe.Strikes(0, 5).Expiration(0, 31).CallsOnly()
 
     @monitor_execution
-    def TradeOptions(self, data: Slice) -> None:
+    def TradeOptions(self, data):
         if self.option_position and self.Portfolio[self.option_position].Invested:
             return
 
@@ -89,7 +89,7 @@ class AlgoTester(QCAlgorithm):
         self.Plot("Option Trades", "Options Bought", 1)
 
     @monitor_execution
-    def CheckOptionExpiration(self) -> None:
+    def CheckOptionExpiration(self):
         if not self.option_position:
             return
 

@@ -59,3 +59,17 @@ ALGOS:
           ALGO_PARAM_1_STEP: 5
       - ALGO_PARAM_2: "full"
     ALGO_SHORT_NAME: "3CSIVMR"
+  - <<: *defaults
+    ALGO_CODE: 4
+    ALGO_NAME: "EarningsVolatilityCrunch"
+    ALGO_MAYUS_LETTERS: "EVC"
+    ALGO_PUBLIC_NAME: "Roosevelt"
+    ALGO_VERSION: 1
+    ALGO_PARAMETRY:
+      - ALGO_PARAM_1:
+          ALGO_PARAM_1_DEFAULT: 15
+          ALGO_PARAM_1_MIN: 10
+          ALGO_PARAM_1_MAX: 20
+          ALGO_PARAM_1_STEP: 5
+      - ALGO_PARAM_2: "full"
+    ALGO_SHORT_NAME: "4EVC"

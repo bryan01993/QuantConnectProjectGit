@@ -1,18 +1,17 @@
 {
     "algorithm-language": "Python",
     "parameters": {
-        "exec.initial_amount" : "10000.00",
+        "exec.initial_amount": "10000.00",
         "exec.start_date": "2019-01-01",
         "exec.end_date": "2023-01-01",
         "univ.coarse.size": "100",
-        "univ.coarse.min_price" : 10,
+        "univ.coarse.min_price": "10",
         "univ.fine.factor": "0.5",
-        "risk.kelly.periods" : "30",
-        "algo.option.upper_filter" : "+2",
-        "algo.option.lower_filter" : "-2",
+        "risk.kelly.periods": "30",
+        "algo.option.upper_filter": "+2",
+        "algo.option.lower_filter": "-2",
         "algo.option.max_exp_days": "60",
         "algo.option.min_exp_days": "10",
-
         "sector": "testing",
         "env": "develop"
     },
@@ -31,5 +30,7 @@
         "log-to-file": true,
         "log-folder": "Logs"
     },
-    "organization-id": "6bfd78b1c53c2e682ab8f3635d854f13"
+    "organization-id": "6bfd78b1c53c2e682ab8f3635d854f13",
+    "python-venv": 1,
+    "encrypted": false
 }

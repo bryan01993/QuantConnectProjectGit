@@ -11,7 +11,6 @@ import sys
 class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
 
     def Initialize(self):
-        self.option_to_equity_map = {}  # Track equity hedges tied to open options
         self.SetStartDate(*map(int, self.GetParameter("exec.start_date").split('-')))
         self.SetEndDate(*map(int, self.GetParameter("exec.end_date").split('-')))
         self.SetCash(self.GetParameter("exec.initial_amount"))
@@ -49,7 +48,7 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         for sec in changes.RemovedSecurities:
             # if sec.Symbol.SecurityType == SecurityType.Equity:
             self.Debug(f"Removing Security: {sec.Symbol.Value}")
-            #     self.RemoveSecurity(sec.Symbol)
+                # self.RemoveSecurity(sec.Symbol)
 
     def OnData(self, slice):
         self.latestOptionChains.clear()
@@ -192,13 +191,9 @@ class CrossSectionalImpliedVolatilityMeanReversion(QCAlgorithm):
         return iv_ranks
 
     def LiquidateRemovedPositions(self, shortVolList, longVolList):
-        option_symbols_to_keep = {x[0] for x in shortVolList} | {x[0] for x in longVolList}
-        equity_symbols_to_keep = {sym.Underlying for sym in option_symbols_to_keep if sym.HasUnderlying}
-        all_symbols_to_keep = option_symbols_to_keep | equity_symbols_to_keep
-        # already handled above
+        keepSymbols = {x[0] for x in shortVolList} | {x[0] for x in longVolList}
         for holding in list(self.Portfolio.Values):
-            if holding.Invested and holding.Symbol not in all_symbols_to_keep:
-                self.Debug(f"Liquidating removed position: {holding.Symbol}")
+            if holding.Invested and holding.Symbol not in keepSymbols:
                 self.Liquidate(holding.Symbol)
 
     def LiquidateExpiringOptions(self):
