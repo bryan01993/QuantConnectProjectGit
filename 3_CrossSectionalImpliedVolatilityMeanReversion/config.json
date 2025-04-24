@@ -20,7 +20,7 @@
     "libraries": [
         {
             "name": "PropietaryCode",
-            "path": "Library\\PropietaryCode"
+            "path": "Library/PropietaryCode"
         }
     ],
     "cloud-id": 21565345,

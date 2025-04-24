@@ -7,6 +7,7 @@ from QuantConnect.Securities.Option import OptionStrategies, OptionDataFilter
 from QuantConnect.Orders.Fees import InteractiveBrokersFeeModel
 from PropietaryCode.decorators import monitor_execution, measure_memory_usage
 # Import alt-data for upcoming earnings
+from QuantConnect import Securities
 from QuantConnect.DataSource import EODHDUpcomingEarnings
 
 
@@ -20,7 +21,7 @@ class EarningsVolatilityCrunch(QCAlgorithm):
         self.SetStartDate(*map(int, self.GetParameter("exec.start_date").split('-')))
         self.SetEndDate(*map(int, self.GetParameter("exec.end_date").split('-')))
         self.SetCash(self.GetParameter("exec.initial_amount"))
-        Securities.Option.Option()
+
         # Use a daily resolution in this example
         # self.SetSecurityInitializer(self.CustomSecurityInitializer)
         self.OptionFilterUniverse()
@@ -77,7 +78,7 @@ class EarningsVolatilityCrunch(QCAlgorithm):
         """
         for security in changes.AddedSecurities:
             # Add an Option chain for each new stock
-            if security.Symbol.SecurityType == SecurityType.Equity:
+            if security.Symbol.SecurityType == SecurityType.EQUITY:
                 option = self.AddOption(security.Symbol.Value,resolution=Resolution.DAILY)
                 # By default it returns a Security object for the option, we can further configure
                 option.SetFilter(self.OptionChainFilter)
@@ -85,7 +86,7 @@ class EarningsVolatilityCrunch(QCAlgorithm):
         for security in changes.RemovedSecurities:
             # If an equity is removed from the universe, we can remove the corresponding option
             if security.Symbol.SecurityType == SecurityType.Equity:
-                # Clean up any positions or remove the Option from the algo,
+                # Clean up any positions or remove the Option from the algo
                 # if no longer needed.
                 pass
 
@@ -173,7 +174,7 @@ class EarningsVolatilityCrunch(QCAlgorithm):
         calls_by_strike = {}
         puts_by_strike = {}
         for contract in option_chain:
-            if contract.Right == OptionRight.Call:
+            if contract.Right == OptionRight.CALL:
                 if contract.Strike not in calls_by_strike:
                     calls_by_strike[contract.Strike] = []
                 calls_by_strike[contract.Strike].append(contract)
