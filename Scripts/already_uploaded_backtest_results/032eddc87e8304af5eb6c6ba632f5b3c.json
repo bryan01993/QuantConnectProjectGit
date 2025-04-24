@@ -1,0 +1,156 @@
+{
+    "backtest": {
+        "note": null,
+        "name": "BT_3_CrossSectionalImpliedVolatilityMeanReversion_2023-01-01_2024-01-01_V1_20250218_232836",
+        "organizationId": 108030,
+        "projectId": 21565345,
+        "completed": true,
+        "optimizationId": null,
+        "backtestId": "032eddc87e8304af5eb6c6ba632f5b3c",
+        "tradeableDates": 0,
+        "researchGuide": {
+            "minutes": 1,
+            "backtestCount": 4,
+            "parameters": 0
+        },
+        "backtestStart": "2020-01-01 00:00:00",
+        "backtestEnd": "2022-01-01 23:59:59",
+        "created": "2025-02-18 22:28:40",
+        "snapshotId": 21565449,
+        "status": "Runtime Error",
+        "error": "[ERROR] FATAL UNHANDLED EXCEPTION:Engine.Run(): Error running algorithm System.ArgumentException: Unable to locate next market open within two weeks.,   at QuantConnect.Securities.SecurityExchangeHours.GetNextMarketOpen(DateTime localDateTime, Boolean extendedMarketHours) in Common/Securities/SecurityExchangeHours.cs:line 365,   at QuantConnect.Securities.SecurityExchangeHours.GetPreviousMarketOpen(DateTime localDateTime, Boolean extendedMarketHours, Boolean firstOpen) in Common/Securities/SecurityExchangeHours.cs:line 274,   at QuantConnect.Securities.SecurityExchangeHours.GetFirstDailyMarketOpen(DateTime localDateTime, Boolean extendedMarketHours) in Common/Securities/SecurityExchangeHours.cs:line 250,   at QuantConnect.Scheduling.TimeRules.<>c__DisplayClass15_0.<AfterMarketOpen>b__1(DateTime date) in Common/Scheduling/TimeRules.cs:line 185,   at System.Linq.Enumerable.IEnumerableSelectIterator`2.MoveNext(),   at System.Linq.Enumerable.IEnumerableWhereSelectIterator`2.MoveNext(),   at QuantConnect.Scheduling.ScheduledEvent.get_NextEventUtcTime() in Common/Scheduling/ScheduledEvent.cs:line 80,   at QuantConnect.Lean.Engine.RealTime.BacktestingRealTimeHandler.<>c.<GetScheduledEventsSortedByTime>b__11_0(KeyValuePair`2 x) in Engine/RealTime/BacktestingRealTimeHandler.cs:line 158,   at System.Linq.Enumerable.EnumerableSorter`2.ComputeKeys(TElement[] elements, Int32 count),   at System.Linq.Enumerable.EnumerableSorter`1.ComputeMap(TElement[] elements, Int32 count),   at System.Linq.Enumerable.EnumerableSorter`1.Sort(TElement[] elements, Int32 count),   at System.Linq.Enumerable.OrderedIterator`1.SortedMap(TElement[] buffer),   at System.Linq.Enumerable.OrderedIterator`2.MoveNext(),   at System.Linq.Enumerable.IteratorSelectIterator`2.Fill(Iterator`1 source, Span`1 results, Func`2 func),   at System.Linq.Enumerable.IteratorSelectIterator`2.ToList(),   at QuantConnect.Lean.Engine.RealTime.BacktestingRealTimeHandler.GetScheduledEventsSortedByTime() in Engine/RealTime/BacktestingRealTimeHandler.cs:line 156,   at QuantConnect.Lean.Engine.RealTime.BacktestingRealTimeHandler.Setup(IAlgorithm algorithm, AlgorithmNodePacket job, IResultHandler resultHandler, IApi api, IIsolatorLimitResultProvider isolatorLimitProvider) in Engine/RealTime/BacktestingRealTimeHandler.cs:line 52,   at QuantConnect.Lean.Engine.Engine.Run(AlgorithmNodePacket job, AlgorithmManager manager, String assemblyPath, WorkerThread workerThread) in Engine/Engine.cs:line 299",
+        "stacktrace": null,
+        "progress": 1,
+        "hasInitializeError": true,
+        "charts": {
+            "Strategy Equity": {
+                "name": "Strategy Equity",
+                "chartType": 0,
+                "series": {
+                    "Equity": {
+                        "name": "Equity",
+                        "unit": "$",
+                        "index": 0,
+                        "seriesType": 2,
+                        "values": [
+                            [
+                                1577854800,
+                                100000,
+                                100000,
+                                100000,
+                                100000
+                            ]
+                        ]
+                    },
+                    "Return": {
+                        "name": "Return",
+                        "unit": "%",
+                        "index": 1,
+                        "seriesType": 3,
+                        "values": [],
+                        "color": "",
+                        "scatterMarkerSymbol": "none"
+                    }
+                }
+            },
+            "Benchmark": {
+                "name": "Benchmark"
+            },
+            "Portfolio Margin": {
+                "name": "Portfolio Margin"
+            },
+            "Assets Sales Volume": {
+                "name": "Assets Sales Volume"
+            }
+        },
+        "parameterSet": [],
+        "rollingWindow": null,
+        "runtimeStatistics": {
+            "Equity": "$100,000.00",
+            "Fees": "-$0.00",
+            "Holdings": "$0.00",
+            "Net Profit": "$0.00",
+            "Probabilistic Sharpe Ratio": "0%",
+            "Return": "0.00 %",
+            "Unrealized": "$0.00",
+            "Volume": "$0.00"
+        },
+        "statistics": [],
+        "totalPerformance": {
+            "tradeStatistics": {
+                "startDateTime": null,
+                "endDateTime": null,
+                "totalNumberOfTrades": 0,
+                "numberOfWinningTrades": 0,
+                "numberOfLosingTrades": 0,
+                "totalProfitLoss": "0",
+                "totalProfit": "0",
+                "totalLoss": "0",
+                "largestProfit": "0",
+                "largestLoss": "0",
+                "averageProfitLoss": "0",
+                "averageProfit": "0",
+                "averageLoss": "0",
+                "averageTradeDuration": "00:00:00",
+                "averageWinningTradeDuration": "00:00:00",
+                "averageLosingTradeDuration": "00:00:00",
+                "medianTradeDuration": "00:00:00",
+                "medianWinningTradeDuration": "00:00:00",
+                "medianLosingTradeDuration": "00:00:00",
+                "maxConsecutiveWinningTrades": 0,
+                "maxConsecutiveLosingTrades": 0,
+                "profitLossRatio": "0",
+                "winLossRatio": "0",
+                "winRate": "0",
+                "lossRate": "0",
+                "averageMAE": "0",
+                "averageMFE": "0",
+                "largestMAE": "0",
+                "largestMFE": "0",
+                "maximumClosedTradeDrawdown": "0",
+                "maximumIntraTradeDrawdown": "0",
+                "profitLossStandardDeviation": "0",
+                "profitLossDownsideDeviation": "0",
+                "profitFactor": "0",
+                "sharpeRatio": "0",
+                "sortinoRatio": "0",
+                "profitToMaxDrawdownRatio": "0",
+                "maximumEndTradeDrawdown": "0",
+                "averageEndTradeDrawdown": "0",
+                "maximumDrawdownDuration": "00:00:00",
+                "totalFees": "0"
+            },
+            "portfolioStatistics": {
+                "averageWinRate": "0",
+                "averageLossRate": "0",
+                "profitLossRatio": "0",
+                "winRate": "0",
+                "lossRate": "0",
+                "expectancy": "0",
+                "startEquity": "0",
+                "endEquity": "0",
+                "compoundingAnnualReturn": "0",
+                "drawdown": "0",
+                "totalNetProfit": "0",
+                "sharpeRatio": "0",
+                "probabilisticSharpeRatio": "0",
+                "sortinoRatio": "0",
+                "alpha": "0",
+                "beta": "0",
+                "annualStandardDeviation": "0",
+                "annualVariance": "0",
+                "informationRatio": "0",
+                "trackingError": "0",
+                "treynorRatio": "0",
+                "portfolioTurnover": "0",
+                "valueAtRisk99": "0",
+                "valueAtRisk95": "0"
+            },
+            "closedTrades": []
+        },
+        "nodeName": "Community B-MICRO",
+        "outOfSampleMaxEndDate": "2024-02-24",
+        "outOfSampleDays": 360
+    },
+    "success": true
+}

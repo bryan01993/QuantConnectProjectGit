@@ -1,0 +1,31 @@
+{
+    "algorithm-language": "Python",
+    "parameters": {
+        "exec.initial_amount": "100000.0",
+        "exec.start_date": "2023-01-01",
+        "exec.end_date": "2024-01-01",
+        "univ.coarse.final_cut": "10",
+        "univ.coarse.min_price": "10",
+        "univ.coarse.max_price": "100",
+        "univ.coarse.dollar_volume": "1000000",
+        "risk.max_loss_pct": "1.5",
+        "risk.kelly.factor": "0.35",
+        "risk.kelly.period": "30",
+        "algo.days_before_earnings": "2",
+        "algo.days_after_earnings": "2",
+        "algo.option.upper_filter": "+2",
+        "algo.option.lower_filter": "-2",
+        "algo.option.max_exp_days": "95",
+        "algo.option.min_exp_days": "25",
+        "algo.option.min_open_inter": "10"
+    },
+    "description": "",
+    "cloud-id": 22447448,
+    "organization-id": "6bfd78b1c53c2e682ab8f3635d854f13",
+    "libraries": [
+        {
+            "name": "PropietaryCode",
+            "path": "Library\\PropietaryCode"
+        }
+    ]
+}
