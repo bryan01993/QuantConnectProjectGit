@@ -4,6 +4,7 @@ from QuantConnect import Symbol
 from QuantConnect.Data.Fundamental import FineFundamental
 from QuantConnect.DataSource import EODHDUpcomingEarnings
 from QuantConnect.Securities import *
+from QuantConnect.Securities.Option import QLOptionPriceModel, IQLRiskFreeRateEstimator,ConstantQLDividendYieldEstimator, IQLUnderlyingVolatilityEstimator
 from datetime import timedelta, datetime
 import pandas as pd
 from PropietaryCode.decorators import monitor_execution
@@ -74,6 +75,7 @@ class EarningsVolatilityCrunch(QCAlgorithm):
 
     def calculate_iv_slope(self, symbols: List[Symbol]):
         slopes = {}
+
         for symbol in symbols:
             contracts = self.OptionChainProvider.GetOptionContractList(symbol, self.Time)
             if not contracts:
@@ -120,8 +122,18 @@ class EarningsVolatilityCrunch(QCAlgorithm):
                 if near_sec.Expiry >= far_sec.Expiry:
                     continue
 
+                try:
+                    near_sec.PriceModel = QLOptionPriceModel()
+                    far_sec.PriceModel = QLOptionPriceModel()
+
+                    near_iv = near_sec.Greeks.ImpliedVolatility
+                    far_iv = far_sec.Greeks.ImpliedVolatility
+
+                except:
+                    continue
+
                 diff_days = (far_sec.Expiry.date() - near_sec.Expiry.date()).days
-                diff_iv = far_sec.ImpliedVolatility - near_sec.ImpliedVolatility
+                diff_iv = far_iv - near_iv
                 slope = sqrt(diff_days ** 2 + diff_iv ** 2)
 
                 if symbol not in slopes:
