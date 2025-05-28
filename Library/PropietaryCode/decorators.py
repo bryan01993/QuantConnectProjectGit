@@ -22,7 +22,30 @@ def monitor_execution(func):
         start_time = time.time()
         tracemalloc.start()  # Start memory tracking
 
-        result = func(self, *args, **kwargs)  # Execute the function
+        try:
+            result = func(self, *args, **kwargs)  # Execute the function
+        except Exception as e:
+            result = None
+            end_time = time.time()
+            current, peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+            execution_time = end_time - start_time
+
+            if hasattr(self, "Log"):
+                log_entry = {
+                    "execution_order": execution_order,
+                    "function": func.__name__,
+                    "execution_time": f"{execution_time:.6f} sec",
+                    "memory_usage": f"{current / 1024:.2f} KB",
+                    "peak_memory": f"{peak / 1024:.2f} KB",
+                    "args": args if args else None,
+                    "kwargs": kwargs if kwargs else None,
+                    "error": f"{type(e).__name__}: {e}"
+                }
+                self.Log(str(log_entry))
+                return None  # Suppress exception and return None
+            else:
+                raise TypeError(f"{self} does not have a 'Log' method. Ensure this is used inside a QCAlgorithm class.")
 
         end_time = time.time()
         current, peak = tracemalloc.get_traced_memory()  # Get memory usage
@@ -89,4 +112,3 @@ def measure_memory_usage(func):
         print(f"[MEMORY] Function {func.__name__} used {mem_diff_mb:.2f} MB additional memory")
         return result
     return wrapper
-
