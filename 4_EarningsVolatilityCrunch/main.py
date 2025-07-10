@@ -251,7 +251,6 @@ class EarningsVolatilityCrunch(QCAlgorithm):
                     "slope": slope
                 })
 
-
         return slopes
 
     @monitor_execution
