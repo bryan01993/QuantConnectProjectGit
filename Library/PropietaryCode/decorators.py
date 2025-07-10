@@ -20,6 +20,23 @@ class FunctionLogger:
         """
         self.qc = qc_algorithm_instance
 
+    def _truncate(self, value, limit=10):
+        """Return a truncated representation for large iterables."""
+        try:
+            if isinstance(value, dict):
+                truncated = {k: value[k] for k in list(value)[:limit]}
+                if len(value) > limit:
+                    truncated['...'] = f"{len(value) - limit} more items"
+                return truncated
+            elif isinstance(value, (list, tuple, set)):
+                seq = list(value)[:limit]
+                if len(value) > limit:
+                    seq.append(f"... {len(value) - limit} more")
+                return seq
+        except Exception:
+            pass
+        return value
+
     def log(self, func):
         """
         Method to act as the decorator itself. It logs information about the decorated function's execution.
@@ -32,22 +49,28 @@ class FunctionLogger:
             FunctionLogger.order += 1  # Increment the order of execution
             func_name = func.__name__
 
-            # Log function arguments with their types --> Commented out for clarity and brevity
-            # signature = inspect.signature(func)
-            # bound_args = signature.bind(*args, **kwargs)
-            # bound_args.apply_defaults()
-            # arg_info = {k: (v, type(v).__name__) for k, v in bound_args.arguments.items()}
+            signature = inspect.signature(func)
+            bound_args = signature.bind_partial(*args, **kwargs)
+            bound_args.apply_defaults()
+            arg_info = {}
+            for k, v in bound_args.arguments.items():
+                if k == 'self':
+                    continue
+                arg_info[k] = self._truncate(v)
 
             try:
                 result = func(*args, **kwargs)
                 duration = round(time.time() - start_time, 4)  # Duration in seconds
 
-                # Access QCAlgorithm's Debug method
-                self.qc.Debug(f"ALGO_ORDER: {FunctionLogger.order}, "
-                              f"FUNCTION_ID: {id(func)}, "
-                              f"FUNCTION_NAME: {func_name}, "
-                              # f"PARAMETERS: {arg_info}, "
-                              f"DURATION: {duration}s")
+                log_data = {
+                    'execution_order': FunctionLogger.order,
+                    'function': func_name,
+                    'execution_time': f"{duration} sec",
+                    'args': arg_info,
+                    'result': self._truncate(result)
+                }
+
+                self.qc.Debug(str(log_data))
 
                 return result
 
