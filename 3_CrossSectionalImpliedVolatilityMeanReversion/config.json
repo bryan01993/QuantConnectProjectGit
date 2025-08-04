@@ -12,8 +12,8 @@
         "risk.kelly.period": "30",
         "algo.option.upper_filter": "+2",
         "algo.option.lower_filter": "-2",
-        "algo.option.max_exp_days": "35",
-        "algo.option.min_exp_days": "5",
+        "algo.option.max_exp_days": "95",
+        "algo.option.min_exp_days": "25",
         "algo.option.min_open_inter": "10"
     },
     "description": "Self mean reversion in option vs stock volatility trade.",
@@ -28,6 +28,3 @@
     "python-venv": 1,
     "encrypted": false
 }
-
-
-

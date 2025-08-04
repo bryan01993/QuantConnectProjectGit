@@ -4,7 +4,8 @@ from QuantConnect import Symbol
 from QuantConnect.Data.Fundamental import FineFundamental
 from QuantConnect.DataSource import EODHDUpcomingEarnings
 from QuantConnect.Securities import *
-
+from math import log, sqrt, exp
+from scipy.stats import norm
 from QuantConnect.Securities.Option import QLOptionPriceModel
 from datetime import timedelta, datetime
 import pandas as pd
@@ -49,16 +50,18 @@ class EarningsVolatilityCrunch(QCAlgorithm):
         self.SetWarmUp(10, Resolution.Daily)
 
         self.UniverseSettings.Resolution = Resolution.Hour
+        self.UniverseSettings.FillForward = False
         self.AddUniverse(self.CoarseSelectionFunction)
         self.AddUniverse(EODHDUpcomingEarnings, self.UpcomingEarningsSelectionFunction)
         self.earnings_calendar = {}  # Cache for earnings dates
-
         self.symbols_total = 0
         self.symbols_optionable = 0
         self.slope_results = {}
         self.volume_results = {}
         self.ivrv_results = {}
         self.added_equities = set()
+        self.latest_iv_data = {}
+
 
     # @monitor_execution
     def CoarseSelectionFunction(self, coarse: List[CoarseFundamental]) -> List[Symbol]:
@@ -89,7 +92,7 @@ class EarningsVolatilityCrunch(QCAlgorithm):
                 iv = self.Securities[symbol].VolatilityModel.Volatility
                 pass
 
-    @monitor_execution
+    # @monitor_execution
     def get_two_closest_option_chains(self, symbol: Symbol, earnings_time: datetime) -> Tuple[
         List[Symbol], List[Symbol]]:
         """
@@ -124,7 +127,7 @@ class EarningsVolatilityCrunch(QCAlgorithm):
 
         return contracts_by_exp.get(near, []), contracts_by_exp.get(far, [])
 
-    @monitor_execution
+    # @monitor_execution
     def match_option_contracts_by_strike_and_type(self, near_chain: List[Symbol], next_chain: List[Symbol]) -> List[
         Tuple[Symbol, Symbol]]:
         """
@@ -147,49 +150,122 @@ class EarningsVolatilityCrunch(QCAlgorithm):
         return matches
 
 
+    # @monitor_execution
+    def get_implied_volatilities(self,near_symbol, far_symbol):
+
+        def compute_iv(symbol):
+
+            if symbol.ID.Date <= self.Time:
+                # self.Debug(f"[IV] Skipping {symbol.Value}, already expired")
+                return None
+
+            # contract = self.AddOptionContract(symbol, Resolution.Daily)
+            history = self.History(symbol, symbol.ID.Date - timedelta(15), self.Time,
+                                 Resolution.Daily)
+            if history.empty:
+                self.Log(f"No history for {symbol}")
+                return None
+
+            last_row = history.iloc[-1]
+            try:
+                underlying_symbol = symbol.Underlying
+                underlying_history = self.History([underlying_symbol],self.Time - timedelta(15), symbol.ID.Date, Resolution.Daily)
+                if underlying_history.empty:
+                    self.Log(f"No underlying history for {underlying_symbol}")
+                    return None
+
+                S = underlying_history.iloc[-1].close
+                K = symbol.ID.StrikePrice
+                expiry = symbol.ID.Date
+                T = (expiry - last_row.name[-1]).days / 365.0
+                if T <= 0:
+                    self.Log(f"Non-positive T for {symbol}")
+                    return None
+
+                price = (last_row.askclose + last_row.bidclose) / 2.0
+                if price <= 0:
+                    self.Log(f"Non-positive price for {symbol}")
+                    return None
+
+                iv = self.black_scholes_call_iv(S, K, T, 0.0, price)
+                self.Log(f"Computed IV for {symbol}: {iv}")
+                return iv
+            except Exception as e:
+                self.Log(f"Error computing IV for {symbol}: {e}")
+                return None
+
+        near_iv = compute_iv(near_symbol)
+        far_iv = compute_iv(far_symbol)
+
+        return (near_iv, far_iv)
+
     @monitor_execution
-    def get_implied_volatilities(self, near_symbol: Symbol, far_symbol: Symbol) -> Tuple[float, float]:
-        """
-        Safely extract the implied volatilities from two option contracts with error handling.
+    def black_scholes_call_iv(self,S, K, T, r, option_price):
+        if T <= 0:
+            self.Log(f"[IV] Skipping: T <= 0 (T={T:.6f})")
+            return None
 
-        Parameters:
-            qc (QCAlgorithm): The algorithm context
-            near_symbol (Symbol): Near-term option contract symbol
-            far_symbol (Symbol): Far-term option contract symbol
+        intrinsic_value = max(S - K * exp(-r * T), 0)
+        if option_price <= intrinsic_value:
+            self.Log(f"[IV] Skipping: option_price <= intrinsic_value ({option_price:.4f} <= {intrinsic_value:.4f})")
+            return None
 
-        Returns:
-            Tuple[float, float]: (near_iv, far_iv) or (None, None) if any error occurs
-        """
-        self.Securities[near_symbol.Symbol].PriceModel = OptionPriceModels.CrankNicolsonFD()
-        self.Securities[far_symbol.Symbol].PriceModel = OptionPriceModels.CrankNicolsonFD()
+        MAX_ITER = 100
+        PRECISION = 1.0e-5
+        sigma = 0.2
 
-        try:
-            front_iv = self.Securities[near_symbol.Symbol].PriceModel.Volatility
-        except Exception as e:
-            self.Debug(f"[Error] Fetching IV for near contract {near_symbol.Value}: {e}")
-            front_iv = None
+        for i in range(MAX_ITER):
+            try:
+                d1 = (log(S / K) + (r + sigma ** 2 / 2) * T) / (sigma * sqrt(T))
+                d2 = d1 - sigma * sqrt(T)
+                price = S * norm.cdf(d1) - K * exp(-r * T) * norm.cdf(d2)
+                vega = S * norm.pdf(d1) * sqrt(T)
 
-        try:
-            back_iv = self.Securities[far_symbol.Symbol].VolatilityModel.Volatility
-        except Exception as e:
-            self.Debug(f"[Error] Fetching IV for far contract {far_symbol.Value}: {e}")
-            back_iv = None
+                if vega < 1e-8:
+                    self.Log(f"[IV] Skipping: vega too small (vega={vega:.8f}) at iter {i}")
+                    return None
 
-        return front_iv, back_iv
+                diff = price - option_price
+                self.Log(
+                    f"[IV] iter {i}: sigma={sigma:.6f}, price={price:.4f}, target={option_price:.4f}, diff={diff:.6f}")
 
-    @monitor_execution
+                if abs(diff) < PRECISION:
+                    self.Log(f"[IV] Converged at iter {i} with sigma={sigma:.6f}")
+                    return sigma
+
+                sigma -= diff / vega
+            except Exception as e:
+                self.Log(f"[IV] Error at iter {i}: {e}")
+                return None
+
+        self.Log(f"[IV] Failed to converge after {MAX_ITER} iterations")
+        return None
+
+    # @monitor_execution
     def OnData(self, data: Slice):
+
+        if data.OptionChains:
+            for chain in data.OptionChains.Values:
+                for contract in chain:
+                    if contract.ImpliedVolatility is not None:
+                        self.latest_iv_data[contract.Symbol] = contract.ImpliedVolatility
+
         for symbol in self.earnings_calendar:
             if self.Portfolio[symbol].Invested:
                 continue
 
-            symbol_slopes = self.slope_results.get(symbol, [])
+            symbol_slopes = (self.slope_results or {}).get(symbol, [])
+
             if not symbol_slopes:
-                self.Debug(f"No slopes found for {symbol}")
+                # self.Debug(f"No slopes found for {symbol}")
                 continue
+
+            if symbol_slopes:
+                self.Log(f"{symbol} has found a slope")
 
             slope_info = max(symbol_slopes, key=lambda x: x['slope'])
             if slope_info['slope'] < 0.7:
+                self.Debug(f"here it would purchase the spread for {symbol}-{self.Time}")
                 continue
 
             if symbol not in self.volume_results:
@@ -219,7 +295,7 @@ class EarningsVolatilityCrunch(QCAlgorithm):
                 slopes[symbol] = self.slope_cache[symbol]
                 self.Debug(f"[Cache Hit] Skipping slope computation for {symbol}")
                 continue
-            self.Debug(f"Processing symbol: {symbol.Value}")
+            # self.Debug(f"Processing symbol: {symbol.Value}")
             if contract_count >= max_total_contracts:
                 break
             # Ensure raw data normalization to avoid exceptions
@@ -234,26 +310,27 @@ class EarningsVolatilityCrunch(QCAlgorithm):
 
             slopes[symbol] = []
             for front, back in contracts_tuples:
-                near_sec = self.AddOptionContract(front, Resolution.Daily)
-                far_sec = self.AddOptionContract(back, Resolution.Daily)
+                # near_sec = self.AddOptionContract(front, Resolution.Daily)
+                # far_sec = self.AddOptionContract(back, Resolution.Daily)
 
-                near_iv, far_iv = self.get_implied_volatilities(near_sec, far_sec)
+                near_iv, far_iv = self.get_implied_volatilities(front, back)
 
                 diff_days = (back.ID.Date.date() - front.ID.Date.date()).days
                 if diff_days <= 0 or near_iv is None or far_iv is None:
                     continue
 
-                slope = (far_iv - near_iv) / diff_days
+                slope = (near_iv - far_iv) / diff_days
                 slopes[symbol].append({
                     "strike": front.ID.StrikePrice,
                     "near_contract": front,
                     "far_contract": back,
-                    "slope": slope
+                    "slope": slope,
+                    "diff_days": diff_days
                 })
 
         return slopes
 
-    @monitor_execution
+    # @monitor_execution
     def filter_pre_earnings_volume(self, threshold: float = 1.20):
         volume_ratios = {}
         for symbol, earnings_date in self.earnings_calendar.items():
@@ -272,7 +349,7 @@ class EarningsVolatilityCrunch(QCAlgorithm):
 
         return volume_ratios
 
-    @monitor_execution
+    # @monitor_execution
     def filter_iv_vs_rv(self, threshold: float = 0.8):
         iv_rv_ratios = {}
         for symbol, earnings_date in self.earnings_calendar.items():
@@ -299,14 +376,14 @@ class EarningsVolatilityCrunch(QCAlgorithm):
         return iv_rv_ratios
 
     def ComputeSlopes(self):
-        self.Debug(f"[{self.Time}] Starting slope calculation for {len(self.earnings_calendar)} symbols")
+        # self.Debug(f"[{self.Time}] Starting slope calculation for {len(self.earnings_calendar)} symbols")
         self.slope_results = self.calculate_iv_slope(self.earnings_calendar)
-        self.Debug(f"[{self.Time}] Slope calculation complete. {len(self.slope_results) if self.slope_results else 0} symbols with slope data")
+        # self.Debug(f"[{self.Time}] Slope calculation complete. {len(self.slope_results) if self.slope_results else 0} symbols with slope data")
 
 
     def OnEndOfAlgorithm(self):
-        describe_object(self.Portfolio, "Portfolio")
-        describe_object(self.Transactions, "Transactions")
+        # describe_object(self.Portfolio, "Portfolio")
+        # describe_object(self.Transactions, "Transactions")
 
         self.Debug(f"Total earnings symbols: {self.symbols_total}")
         self.Debug(f"Optionable symbols: {self.symbols_optionable}")
@@ -315,11 +392,12 @@ class EarningsVolatilityCrunch(QCAlgorithm):
         self.Debug(f"Volume Pass Count: {len(self.volume_results) if self.volume_results else 0}")
         self.Debug(f"IV/RV Pass Count: {len(self.ivrv_results) if self.ivrv_results else 0}")
 
-        self.SetRuntimeStatistic("Earnings Symbols", str(self.symbols_total))
-        self.SetRuntimeStatistic("Optionable Symbols", str(self.symbols_optionable))
-        self.SetRuntimeStatistic("Slope Filtered", str(len(self.slope_results) if self.slope_results else 0))
-        self.SetRuntimeStatistic("Volume Filtered", str(len(self.volume_results) if self.volume_results else 0))
-        self.SetRuntimeStatistic("IV/RV Filtered", str(len(self.ivrv_results) if self.ivrv_results else 0))
+        # Still not available for testing
+        # self.SetRuntimeStatistic("Earnings Symbols", str(self.symbols_total))
+        # self.SetRuntimeStatistic("Optionable Symbols", str(self.symbols_optionable))
+        # self.SetRuntimeStatistic("Slope Filtered", str(len(self.slope_results) if self.slope_results else 0))
+        # self.SetRuntimeStatistic("Volume Filtered", str(len(self.volume_results) if self.volume_results else 0))
+        # self.SetRuntimeStatistic("IV/RV Filtered", str(len(self.ivrv_results) if self.ivrv_results else 0))
         import json
 
         if OBJECT_LOG:

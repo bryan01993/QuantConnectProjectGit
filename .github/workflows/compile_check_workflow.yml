@@ -1,0 +1,41 @@
+name: Compile QC Algorithms
+
+# This workflow runs on every push to the default branch (market) and on
+# pull requests targeting it. It uses the provided compile_agent to check
+# that all Python files in the repository are syntactically valid. If any
+# file fails to compile, the workflow exits with a non‑zero status and
+# GitHub will mark the job as failed.
+
+on:
+  push:
+    branches:
+      - market
+  pull_request:
+    branches:
+      - market
+
+jobs:
+  compile-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          # Install any dependencies required for running compile_agent.
+          # If your repository includes a requirements.txt, uncomment the
+          # following line:
+          # pip install -r requirements.txt
+          pip install ast pytest
+
+      - name: Run compile checks on all Python files
+        run: |
+          # Identify all tracked Python files and run the agent against them.
+          py_files=$(git ls-files '*.py')
+          python compile_agent.py $py_files

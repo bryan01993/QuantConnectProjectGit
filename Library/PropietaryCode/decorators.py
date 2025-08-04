@@ -1,99 +1,115 @@
-# from QuantConnect.Algorithm import QCAlgorithm
 import time
-import inspect
+import tracemalloc
+from functools import wraps
+from collections.abc import Iterator
+import itertools
+import os
+import psutil
+import functools
 
 
-class FunctionLogger:
+execution_order = 0  # Global counter for function order
+
+def monitor_execution(func):
     """
-    A class to log function execution details in QuantConnect algorithms.
-    It logs the order of execution, function name, start time, parameters, duration,
-    and raises any exceptions if occurred.
-
-    This class is callable as a decorator and logs using QuantConnect's native logging system.
+    Decorator to log execution time, arguments, return values, and memory usage of selected functions
+    using QuantConnect's .Log() method. Also maintains nominal execution order.
     """
-    order = 0  # Nominal order of execution
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        global execution_order
+        execution_order += 1
+        start_time = time.time()
+        tracemalloc.start()  # Start memory tracking
 
-    def __init__(self, qc_algorithm_instance):
-        """
-        Initialize the FunctionLogger with an instance of the QCAlgorithm class.
-        :param qc_algorithm_instance: Instance of QCAlgorithm (or inherited class)
-        """
-        self.qc = qc_algorithm_instance
-
-    def _truncate(self, value, limit=10):
-        """Return a truncated representation for large iterables."""
         try:
-            if isinstance(value, dict):
-                truncated = {k: value[k] for k in list(value)[:limit]}
-                if len(value) > limit:
-                    truncated['...'] = f"{len(value) - limit} more items"
-                return truncated
-            elif isinstance(value, (list, tuple, set)):
-                seq = list(value)[:limit]
-                if len(value) > limit:
-                    seq.append(f"... {len(value) - limit} more")
-                return seq
-        except Exception:
-            pass
-        return value
+            result = func(self, *args, **kwargs)  # Execute the function
+        except Exception as e:
+            result = None
+            end_time = time.time()
+            current, peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+            execution_time = end_time - start_time
 
-    def log(self, func):
-        """
-        Method to act as the decorator itself. It logs information about the decorated function's execution.
-
-        :param func: The function being decorated
-        """
-
-        def wrapper(*args, **kwargs):
-            start_time = time.time()
-            FunctionLogger.order += 1  # Increment the order of execution
-            func_name = func.__name__
-
-            signature = inspect.signature(func)
-            bound_args = signature.bind_partial(*args, **kwargs)
-            bound_args.apply_defaults()
-            arg_info = {}
-            for k, v in bound_args.arguments.items():
-                if k == 'self':
-                    continue
-                arg_info[k] = self._truncate(v)
-
-            try:
-                result = func(*args, **kwargs)
-                duration = round(time.time() - start_time, 4)  # Duration in seconds
-
-                log_data = {
-                    'execution_order': FunctionLogger.order,
-                    'function': func_name,
-                    'execution_time': f"{duration} sec",
-                    'args': arg_info,
-                    'result': self._truncate(result)
+            if hasattr(self, "Log"):
+                log_entry = {
+                    "execution_order": execution_order,
+                    "function": func.__name__,
+                    "execution_time": f"{execution_time:.6f} sec",
+                    "memory_usage": f"{current / 1024:.2f} KB",
+                    "peak_memory": f"{peak / 1024:.2f} KB",
+                    # "args": args if args else None,
+                    # "kwargs": kwargs if kwargs else None,
+                    "error": f"{type(e).__name__}: {e}"
                 }
+                self.Log(str(log_entry))
+                return None  # Suppress exception and return None
+            else:
+                raise TypeError(f"{self} does not have a 'Log' method. Ensure this is used inside a QCAlgorithm class.")
 
-                self.qc.Debug(str(log_data))
+        end_time = time.time()
+        current, peak = tracemalloc.get_traced_memory()  # Get memory usage
+        tracemalloc.stop()
+        execution_time = end_time - start_time
 
-                return result
+        # Handle cases where args or kwargs are empty
+        args_display = args if args else None
+        kwargs_display = kwargs if kwargs else None
 
-            except Exception as e:
-                # Access QCAlgorithm's Error method and re-raise the exception
-                self.qc.Error(f"Exception in {func_name}: {str(e)}")
-                raise e
+        # Limit result size if it's a list or iterator
+        try:
+            if result is None:
+                result_display = "No return value"
+            elif isinstance(result, list):
+                if len(result) > 5:
+                    result_display = result[:5] + ["..."]  # Keep first 5 elements and indicate truncation
+                elif len(result) == 0:
+                    result_display = "Empty list"
+                else:
+                    result_display = result
+            elif isinstance(result, Iterator):
+                result_display = list(itertools.islice(result, 5))  # Take the first 5 elements from iterator
+                if result_display:
+                    result_display.append("...")
+                else:
+                    result_display = "Empty iterator"
+            else:
+                result_display = result
+        except MemoryError:
+            result_display = "MemoryError encountered while processing result"
 
-        return wrapper
+        # Ensure self has Log method (it should be an instance of QCAlgorithm)
+        result_display_truncated = (result_display[:197] + "...") if len(result_display) > 200 else result_display
+        if hasattr(self, "Log"):
+            log_entry = {
+                "execution_order": execution_order,
+                "function": func.__name__,
+                "execution_time": f"{execution_time:.6f} sec",
+                "memory_usage": f"{current / 1024:.2f} KB",
+                "peak_memory": f"{peak / 1024:.2f} KB",
+                # "args": args_display,
+                # "kwargs": kwargs_display,
+                "result": result_display_truncated
+            }
+            self.Log(str(log_entry))
+        else:
+            raise TypeError(f"{self} does not have a 'Log' method. Ensure this is used inside a QCAlgorithm class.")
 
+        return result
+    return wrapper
 
-# Example usage within a QuantConnect Algorithm
-# class MyAlgorithm(QCAlgorithm):
-#     def Initialize(self):
-#         self.SetStartDate(2022, 1, 1)
-#         self.SetEndDate(2022, 12, 31)
-#         self.SetCash(100000)
-#
-#         # Instantiate FunctionLogger with the algorithm instance
-#         self.function_logger = FunctionLogger(self)
-#
-#     @FunctionLogger.log
-#     def OnData(self, data):
-#         # Example function that will be logged
-#         self.Debug("Processing new data...")
-#         pass
+def measure_memory_usage(func):
+    """
+    Decorator to measure memory usage before/after a function call
+    and log the consumption delta.
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        process = psutil.Process(os.getpid())
+        mem_before = process.memory_info().rss  # in bytes
+        result = func(*args, **kwargs)
+        mem_after = process.memory_info().rss
+        mem_diff_mb = (mem_after - mem_before) / (1024.0 * 1024.0)
+        print(f"[MEMORY] Function {func.__name__} used {mem_diff_mb:.2f} MB additional memory")
+        return result
+    return wrapper

@@ -1827,13 +1827,13 @@ files = [
 
 [[package]]
 name = "lean"
-version = "1.0.219"
+version = "1.0.220"
 description = "A CLI aimed at making it easier to run QuantConnect's LEAN engine locally and in the cloud"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "lean-1.0.219-py3-none-any.whl", hash = "sha256:3563a8b3d85ff52f81aef4ebc69ea5ecfcc44fbf6460d50969caaf5560d76760"},
-    {file = "lean-1.0.219.tar.gz", hash = "sha256:f90621189bee72f5e78c27849247e53d092a8ae29580e722bc15a8d6391b7bc9"},
+    {file = "lean-1.0.220-py3-none-any.whl", hash = "sha256:e4278d01134340fe0ef5fe10ce1a89e8484adf3697606b8959c39fe4cf1ab41d"},
+    {file = "lean-1.0.220.tar.gz", hash = "sha256:ce69d3f359270d872ed0fd1b243f10e6381b224b15fed2a93f1bde3363e83a03"},
 ]
 
 [package.dependencies]
@@ -1845,7 +1845,7 @@ json5 = ">=0.9.8"
 lxml = ">=4.9.0"
 pydantic = ">=1.8.2"
 python-dateutil = ">=2.8.2"
-quantconnect-stubs = ">=17133"
+quantconnect-stubs = ">=17178"
 requests = ">=2.27.1"
 rich = ">=9.10.0"
 setuptools = "*"
