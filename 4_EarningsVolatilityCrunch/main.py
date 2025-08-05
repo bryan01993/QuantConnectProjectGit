@@ -62,6 +62,20 @@ class EarningsVolatilityCrunch(QCAlgorithm):
         self.added_equities = set()
         self.latest_iv_data = {}
 
+    def PurgeOldEarningsData(self):
+        cutoff = self.Time - timedelta(days=15)
+        self.earnings_calendar = {
+            symbol: date for symbol, date in self.earnings_calendar.items() if date >= cutoff
+        }
+        cleaned_slopes = {}
+        for symbol, slopes in self.slope_results.items():
+            if symbol not in self.earnings_calendar:
+                continue
+            valid = [s for s in slopes if s['near_contract'].ID.Date > self.Time]
+            if valid:
+                cleaned_slopes[symbol] = valid
+        self.slope_results = cleaned_slopes
+
 
     # @monitor_execution
     def CoarseSelectionFunction(self, coarse: List[CoarseFundamental]) -> List[Symbol]:
@@ -376,9 +390,8 @@ class EarningsVolatilityCrunch(QCAlgorithm):
         return iv_rv_ratios
 
     def ComputeSlopes(self):
-        # self.Debug(f"[{self.Time}] Starting slope calculation for {len(self.earnings_calendar)} symbols")
+        self.PurgeOldEarningsData()
         self.slope_results = self.calculate_iv_slope(self.earnings_calendar)
-        # self.Debug(f"[{self.Time}] Slope calculation complete. {len(self.slope_results) if self.slope_results else 0} symbols with slope data")
 
 
     def OnEndOfAlgorithm(self):
