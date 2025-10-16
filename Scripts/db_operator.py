@@ -1,11 +1,115 @@
-import json
-import os
-import time
-from google.cloud import bigquery
+from __future__ import annotations
 
+import datetime as dt
+from typing import Any, Dict, List, Optional, Callable, Union
+import json, os, tempfile, time
+from typing import List, Dict, Any, Iterable
+
+from google.cloud import bigquery
+from google.api_core.exceptions import GoogleAPICallError, RetryError, ServiceUnavailable
+from requests.exceptions import SSLError as RequestsSSLError
 # If you run into cross-partition or cross-filesystem issues with os.rename, consider using shutil.move.
 import shutil
 
+def safe_move(src: str, dst: str) -> None:
+    """Move src → dst; if dst exists, append a timestamp."""
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    if os.path.exists(dst):
+        base, ext = os.path.splitext(dst)
+        dst = f"{base}_{int(time.time())}{ext}"
+    shutil.move(src, dst)
+    print(f"File moved to {dst}")
+
+def guess_backtest_id_from_filename(file_name: str) -> Optional[str]:
+    """
+    Extract backtestId from filenames like:
+      6bfd78b1c53c2e682ab8f3635d8541f3.json
+      6bfd78b1c53c2e682ab8f3635d8541f3_orders.json
+      7df74aeb1e2f..._24_orders.json   (suffix pages etc. are ignored)
+    """
+    base = os.path.splitext(file_name)[0]
+    return base.split("_")[0] if base else None
+
+def insert_rows_chunked_with_fallback(
+    client: bigquery.Client,
+    table_id: str,
+    rows_to_insert: List[Dict[str, Any]],
+    *,
+    max_rows_per_request: int = 500,
+    max_request_bytes: int = 9_000_000,   # < 10MB request cap
+    max_row_bytes_streaming: int = 950_000,  # streaming row hard-ish limit (~1MB)
+    max_retries: int = 5,
+    base_sleep: float = 1.0,
+) -> None:
+    """
+    Stream rows in size-aware chunks with retry/backoff. If any single row is too large
+    for streaming or repeated SSL/retry errors occur, fall back to a load job via NDJSON.
+    """
+
+    def _row_size_b(row: Dict[str, Any]) -> int:
+        return len(json.dumps(row, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+
+    # If any row is too big for streaming, go straight to load job.
+    if any(_row_size_b(r) > max_row_bytes_streaming for r in rows_to_insert):
+        _load_via_ndjson(client, table_id, rows_to_insert)
+        return
+
+    batch: List[Dict[str, Any]] = []
+    batch_bytes = 0
+
+    def _send_batch(b: List[Dict[str, Any]]) -> None:
+        if not b:
+            return
+        # retry/backoff on transient/SSL errors; if still failing → fallback
+        for attempt in range(max_retries):
+            try:
+                errors = client.insert_rows_json(table_id, b)
+                if errors:  # API returned per-row errors
+                    # If many rows error (often size/shape), fallback is safer
+                    raise RuntimeError(f"Streaming insert errors: {errors!r}")
+                return
+            except (RequestsSSLError, ServiceUnavailable, GoogleAPICallError, RetryError, RuntimeError) as exc:
+                last = attempt == max_retries - 1
+                if last:
+                    # Fallback this batch via load job
+                    _load_via_ndjson(client, table_id, b)
+                    return
+                time.sleep(base_sleep * (2 ** attempt))
+
+    for row in rows_to_insert:
+        size = _row_size_b(row)
+        if batch and (len(batch) >= max_rows_per_request or batch_bytes + size > max_request_bytes):
+            _send_batch(batch)
+            batch = []
+            batch_bytes = 0
+        batch.append(row)
+        batch_bytes += size
+
+    _send_batch(batch)
+
+
+def _load_via_ndjson(client: bigquery.Client, table_id: str, rows: Iterable[Dict[str, Any]]) -> None:
+    """Append rows using a load job from a local NDJSON temp file."""
+    os.makedirs(os.path.dirname(__file__), exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".ndjson", delete=False) as tmp:
+        path = tmp.name
+        for r in rows:
+            tmp.write(json.dumps(r, ensure_ascii=False))
+            tmp.write("\n")
+
+    job_config = bigquery.LoadJobConfig(
+        source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
+        write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+    )
+    try:
+        with open(path, "rb") as f:
+            job = client.load_table_from_file(f, table_id, job_config=job_config)
+        job.result()  # wait
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 def insert_rows_with_logging(client, table_id, rows_to_insert):
     """
     Inserts rows into the given BigQuery table and logs any errors.
@@ -24,64 +128,100 @@ def insert_rows_with_logging(client, table_id, rows_to_insert):
 
 def load_json_to_bigquery(json_file_path, dataset_id):
     """
-    Load a backtest JSON file into respective BigQuery tables.
+    Load a JSON file into BigQuery. Supports:
+      - Backtest result files:   Scripts/backtest_results/<backtestId>.json
+      - Orders result files:     Scripts/orders_results/<backtestId>[_...]_orders.json
 
-    If the file's backtestId is already in BigQuery, skip upload and move the file
-    to the already_uploaded_backtest_results folder. If the file already exists
-    at the destination, rename the new file by appending a timestamp.
+    Dedupe:
+      - Backtests  -> BTOPResults(backtestId)
+      - Orders     -> BTOPOrders(backtestId)  (any rows for that backtest => considered uploaded)
 
-    Args:
-        json_file_path (str): Path to the JSON file.
-        dataset_id (str): BigQuery dataset ID where the tables are located.
+    After upload (or if already uploaded), move the file to the respective 'already_uploaded_*' folder.
     """
-    # Derive the script's absolute directory path
     current_dir = os.path.dirname(os.path.abspath(__file__))
-
     client = bigquery.Client(project='bav-personal-cloud')
 
-    # Check if the file has already been uploaded
-    uploaded_files_table = f"{dataset_id}.BTOPResults"
-    json_file_name = os.path.basename(json_file_path)
+    file_name = os.path.basename(json_file_path)
+    is_orders = file_name.endswith("_orders.json")
 
+    # Destination for moved files
+    already_uploaded_dir = os.path.join(
+        current_dir,
+        "../Scripts/already_uploaded_orders_results" if is_orders
+        else "../Scripts/already_uploaded_backtest_results"
+    )
+    destination_file = os.path.join(already_uploaded_dir, file_name)
+
+    # Dedupe logic per kind
+    if is_orders:
+        backtest_id_guess = guess_backtest_id_from_filename(file_name)
+        if not backtest_id_guess:
+            print(f"Could not infer backtestId from {file_name}; skipping.")
+            safe_move(json_file_path, destination_file)
+            return
+
+        query = f"""
+            SELECT COUNT(1) AS count
+            FROM `{dataset_id}.BTOPOrders`
+            WHERE backtestId = '{backtest_id_guess}'
+        """
+        query_job = client.query(query)
+        count = [row.count for row in query_job.result()][0]
+
+        if count > 0:
+            print(f"Orders for backtestId={backtest_id_guess} already uploaded. Moving file...")
+            safe_move(json_file_path, destination_file)
+            return
+
+        # Load file, wrap as expected for load_orders()
+        with open(json_file_path, 'r') as f:
+            payload = json.load(f)
+
+        if isinstance(payload, list):
+            data = {"backtest": {"backtestId": backtest_id_guess}, "orders": payload}
+        elif isinstance(payload, dict):
+            data = payload
+            data.setdefault("backtest", {}).setdefault("backtestId", backtest_id_guess)
+            if "orders" not in data:
+                data["orders"] = []
+        else:
+            print(f"Unrecognized JSON structure in {file_name}; skipping.")
+            safe_move(json_file_path, destination_file)
+            return
+
+        print("Loading orders data...")
+        load_orders(data, client, dataset_id)
+        print("Orders load complete.")
+        safe_move(json_file_path, destination_file)
+        return
+
+    # ----- Backtest results path (existing behavior) -----
+    uploaded_files_table = f"{dataset_id}.BTOPResults"
+    backtest_id_from_name = file_name.strip(".json")
     query = f"""
         SELECT COUNT(backtestId) as count
         FROM `{uploaded_files_table}`
-        WHERE backtestId = '{json_file_name.strip(".json")}'
+        WHERE backtestId = '{backtest_id_from_name}'
     """
     query_job = client.query(query)
     results = query_job.result()
     count = [row.count for row in results][0]
 
-    # Construct the folder for already-uploaded files
-    already_uploaded_dir = os.path.join(current_dir, "../Scripts/already_uploaded_backtest_results")
-    os.makedirs(already_uploaded_dir, exist_ok=True)
-    destination_file = os.path.join(already_uploaded_dir, json_file_name)
-
-    # Helper function to safely move the file (avoid collisions)
-    def safe_move(src, dst):
-        if os.path.exists(dst):
-            base, ext = os.path.splitext(dst)
-            dst = f"{base}_{int(time.time())}{ext}"
-        shutil.move(src, dst)
-        print(f"File moved to {dst}")
-
     if count > 0:
-        print(f"File {json_file_name} has already been uploaded. Moving file...")
+        print(f"File {file_name} has already been uploaded. Moving file...")
         safe_move(json_file_path, destination_file)
         return
 
-    # Load JSON file
     with open(json_file_path, 'r') as f:
         data = json.load(f)
 
-    # Parse and insert data into tables
     print("Loading backtest data...")
     load_backtest(data, client, dataset_id)
     print("Loading research guide data...")
     load_research_guide(data, client, dataset_id)
-    print("Loading research guide data...")
-    load_backtest_statistics(data, client, dataset_id)
     print("Loading backtest statistics data...")
+    load_backtest_statistics(data, client, dataset_id)
+    print("Loading charts data...")
     load_charts(data, client, dataset_id)
     print("Loading parameter set data...")
     load_parameter_set(data, client, dataset_id)
@@ -93,9 +233,8 @@ def load_json_to_bigquery(json_file_path, dataset_id):
     load_total_performance(data, client, dataset_id)
     print("Loading errors data...")
     load_errors(data, client, dataset_id)
-    print("Data loading complete.")
+    print("Backtest load complete.")
 
-    # After successful insert, safely move the file
     safe_move(json_file_path, destination_file)
 
 
@@ -322,6 +461,210 @@ def load_runtime_statistics(data, client, dataset_id):
     if rows_to_insert:
         insert_rows_with_logging(client, table_id, rows_to_insert)
 
+
+
+
+def load_orders(
+    data: Union[Dict[str, Any], List[Dict[str, Any]]],
+    client,
+    dataset_id: str,
+    insert_fn: Optional[Callable[[Any, str, List[Dict[str, Any]]], None]] = None,
+) -> None:
+    """
+    Load QC order payloads into BigQuery table `BTOPOrders`.
+
+    Parameters
+    ----------
+    data : dict | list
+        Either:
+          - a dict containing 'backtest' (with 'backtestId') and 'orders' (list), or
+          - a bare list of order dicts (in which case 'backtest.backtestId' must be present in data['backtest'] or is provided via each row's tag).
+    client : bigquery.Client
+        Initialized BigQuery client.
+    dataset_id : str
+        Target dataset (e.g., "develop").
+    insert_fn : callable(client, table_id, rows)
+        Injection point for `insert_rows_with_logging`. If None, uses global `insert_rows_with_logging`.
+
+    Notes
+    -----
+    - Maps only the fields present in the BTOPOrders DDL; extra fields in the payload are ignored.
+    - Timestamps are normalized to RFC3339 strings for safety.
+    - Events.time in QC can be epoch seconds; converted to UTC timestamp.
+    """
+    if insert_fn is None:
+        # falls back to helper used elsewhere in your codebase
+        insert_fn = insert_rows_with_logging  # noqa: F821 (assumed to exist in caller's module)
+
+    table_id = f"{dataset_id}.BTOPOrders"
+    now_ts = dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc).isoformat()
+
+    # ---- helpers -----------------------------------------------------------
+    def _to_ts(value: Any) -> Optional[str]:
+        """Accept ISO8601 string or epoch (int/float) and return RFC3339 UTC string."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, (int, float)):
+            return dt.datetime.fromtimestamp(float(value), tz=dt.timezone.utc).isoformat()
+        if isinstance(value, str):
+            try:
+                # Normalize Z → +00:00 for ISO compliance
+                if value.endswith("Z"):
+                    value = value.replace("Z", "+00:00")
+                return dt.datetime.fromisoformat(value).astimezone(dt.timezone.utc).isoformat()
+            except Exception:
+                return None
+        if isinstance(value, dt.datetime):
+            return value.astimezone(dt.timezone.utc).isoformat()
+        return None
+
+    def _int_or_none(v: Any) -> Optional[int]:
+        try:
+            return int(v)
+        except Exception:
+            return None
+
+    def _float_or_none(v: Any) -> Optional[float]:
+        try:
+            return float(v)
+        except Exception:
+            return None
+
+    def _bool_or_none(v: Any) -> Optional[bool]:
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return bool(v)
+        if isinstance(v, str):
+            if v.lower() in {"true", "t", "1"}:
+                return True
+            if v.lower() in {"false", "f", "0"}:
+                return False
+        return None
+
+    # ---- extract containers -----------------------------------------------
+    if isinstance(data, list):
+        orders = data
+        backtest_id = None
+    elif isinstance(data, dict):
+        orders = data.get("orders") or data.get("Orders") or []
+        bt = data.get("backtest") or {}
+        backtest_id = bt.get("backtestId") or bt.get("BacktestId")
+        # Some QC endpoints return the list directly under the root
+        if not orders and isinstance(data.get("backtest"), list):
+            orders = data["backtest"]
+    else:
+        return
+
+    if not orders:
+        return  # nothing to insert
+
+    rows: List[Dict[str, Any]] = []
+    for o in orders:
+        # Determine backtestId per row (prefer global, fall back to tag decoding if you encode it yourself)
+        bt_id = backtest_id
+        if not bt_id:
+            bt_id = (o.get("backtestId") or o.get("BacktestId") or None)
+
+        symbol = o.get("symbol", {}) or {}
+        properties = o.get("properties", {}) or {}
+        order_submission = o.get("orderSubmissionData", {}) or {}
+
+        # Build events array
+        evs_src = o.get("events", []) or []
+        events_bq = []
+        for e in evs_src:
+            events_bq.append(
+                {
+                    "algorithmId": e.get("algorithmId"),
+                    "symbol": e.get("symbol"),
+                    "symbolValue": e.get("symbolValue"),
+                    "symbolPermtick": e.get("symbolPermtick"),
+                    "orderId": _int_or_none(e.get("orderId")),
+                    "orderEventId": _int_or_none(e.get("orderEventId")),
+                    "id": e.get("id") if isinstance(e.get("id"), int) else _int_or_none(e.get("id")),
+                    "status": e.get("status"),
+                    "orderFeeAmount": _float_or_none(e.get("orderFeeAmount")),
+                    "orderFeeCurrency": e.get("orderFeeCurrency"),
+                    "fillPrice": _float_or_none(e.get("fillPrice")),
+                    "fillPriceCurrency": e.get("fillPriceCurrency"),
+                    "fillQuantity": _float_or_none(e.get("fillQuantity")),
+                    "direction": e.get("direction"),
+                    "message": e.get("message"),
+                    "isAssignment": _bool_or_none(e.get("isAssignment")),
+                    "stopPrice": _float_or_none(e.get("stopPrice")),
+                    "limitPrice": _float_or_none(e.get("limitPrice")),
+                    "quantity": _float_or_none(e.get("quantity")),
+                    "time": _to_ts(e.get("time")),
+                    "isInTheMoney": _bool_or_none(e.get("isInTheMoney")),
+                }
+            )
+
+        # Group order manager
+        gom = o.get("groupOrderManager") or {}
+        gom_bq = {
+            "id": _int_or_none(gom.get("id")),
+            "quantity": _float_or_none(gom.get("quantity")),
+            "count": _int_or_none(gom.get("count")),
+            "limitPrice": _float_or_none(gom.get("limitPrice")),
+            "orderIds": [int(x) for x in (gom.get("orderIds") or []) if isinstance(x, (int, str)) and str(x).isdigit()],
+            "direction": _int_or_none(gom.get("direction")),
+        }
+
+        row = {
+            "backtestId": bt_id,
+            "id": _int_or_none(o.get("id")),
+            "contingentId": _int_or_none(o.get("contingentId")),
+            "brokerId": [str(x) for x in (o.get("brokerId") or [])],
+            "symbol": {
+                "value": symbol.get("value"),
+                "id": symbol.get("id"),
+                "permtick": symbol.get("permtick"),
+            },
+            "limitPrice": _float_or_none(o.get("limitPrice")),
+            "stopPrice": _float_or_none(o.get("stopPrice")),
+            "stopTriggered": _bool_or_none(o.get("stopTriggered")),
+            "price": _float_or_none(o.get("price")),
+            "priceCurrency": o.get("priceCurrency"),
+            "quantity": _float_or_none(o.get("quantity")),
+            "value": _float_or_none(o.get("value")),
+            "time": _to_ts(o.get("time")),
+            "createdTime": _to_ts(o.get("createdTime")),
+            "lastFillTime": _to_ts(o.get("lastFillTime")),
+            "lastUpdateTime": _to_ts(o.get("lastUpdateTime")),
+            "canceledTime": _to_ts(o.get("canceledTime")),
+            "type": _int_or_none(o.get("type")),
+            "status": _int_or_none(o.get("status")),
+            "securityType": _int_or_none(o.get("securityType")),
+            "direction": _int_or_none(o.get("direction")),
+            "tag": o.get("tag"),
+            "orderSubmissionData": {
+                "bidPrice": _float_or_none(order_submission.get("bidPrice")),
+                "askPrice": _float_or_none(order_submission.get("askPrice")),
+                "lastPrice": _float_or_none(order_submission.get("lastPrice")),
+            },
+            "isMarketable": _bool_or_none(o.get("isMarketable")),
+            "properties": {
+                # QC sometimes returns {} — store None when absent
+                "timeInForce": _int_or_none(properties.get("timeInForce")) if isinstance(properties.get("timeInForce"), (int, str)) else None
+            },
+            "events": events_bq,
+            "trailingAmount": _float_or_none(o.get("trailingAmount")),
+            "trailingPercentage": _bool_or_none(o.get("trailingPercentage")),
+            "groupOrderManager": gom_bq if any(v is not None and v != [] for v in gom_bq.values()) else None,
+            "triggerPrice": _float_or_none(o.get("triggerPrice")),
+            "triggerTouched": _bool_or_none(o.get("triggerTouched")),
+            "_ingestedAt": now_ts,
+        }
+
+        # Only append valid rows (must have backtestId and id)
+        if row["backtestId"] and row["id"] is not None:
+            rows.append(row)
+
+    if rows:
+        insert_rows_chunked_with_fallback(client, table_id, rows)
+
+
 def load_backtest_statistics(data, client, dataset_id):
     table_id = f"{dataset_id}.BTOPStatistics"
     bt_stats = data["backtest"].get("statistics")
@@ -504,13 +847,20 @@ if __name__ == "__main__":
     dataset = "develop"
 
     backtest_results_dir = os.path.join(current_dir, "../Scripts/backtest_results")
-    # We remove the rename logic from here because it is now done inside load_json_to_bigquery
-    # when the file is already present or after successful insertion.
+    orders_results_dir   = os.path.join(current_dir, "../Scripts/orders_results")
 
-    # Iterate over all JSON files in the backtest_results directory
-    for file_name in os.listdir(backtest_results_dir):
-        time.sleep(1)
-        if file_name.endswith(".json"):
-            json_file = os.path.join(backtest_results_dir, file_name)
-            # Run the data load, which also moves the file appropriately
-            load_json_to_bigquery(json_file, dataset)
+    # Process BACKTEST files
+    if os.path.isdir(backtest_results_dir):
+        for file_name in os.listdir(backtest_results_dir):
+            time.sleep(1)
+            if file_name.endswith(".json"):
+                json_file = os.path.join(backtest_results_dir, file_name)
+                load_json_to_bigquery(json_file, dataset)
+
+    # Process ORDERS files
+    if os.path.isdir(orders_results_dir):
+        for file_name in os.listdir(orders_results_dir):
+            time.sleep(1)
+            if file_name.endswith(".json"):
+                json_file = os.path.join(orders_results_dir, file_name)
+                load_json_to_bigquery(json_file, dataset)
