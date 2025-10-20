@@ -1827,13 +1827,13 @@ files = [
 
 [[package]]
 name = "lean"
-version = "1.0.220"
+version = "1.0.221"
 description = "A CLI aimed at making it easier to run QuantConnect's LEAN engine locally and in the cloud"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "lean-1.0.220-py3-none-any.whl", hash = "sha256:e4278d01134340fe0ef5fe10ce1a89e8484adf3697606b8959c39fe4cf1ab41d"},
-    {file = "lean-1.0.220.tar.gz", hash = "sha256:ce69d3f359270d872ed0fd1b243f10e6381b224b15fed2a93f1bde3363e83a03"},
+    {file = "lean-1.0.221-py3-none-any.whl", hash = "sha256:74591328e8c1d77bb5b976a5a04b155a7f082a1570845199f58f9bf52c1d5da4"},
+    {file = "lean-1.0.221.tar.gz", hash = "sha256:4108de656cad92d06685ead0247c0c04a91d5bf7d31c1adbe5b611978192dcde"},
 ]
 
 [package.dependencies]
@@ -1845,7 +1845,7 @@ json5 = ">=0.9.8"
 lxml = ">=4.9.0"
 pydantic = ">=1.8.2"
 python-dateutil = ">=2.8.2"
-quantconnect-stubs = ">=17178"
+quantconnect-stubs = ">=17313"
 requests = ">=2.27.1"
 rich = ">=9.10.0"
 setuptools = "*"
@@ -3302,13 +3302,13 @@ cffi = {version = "*", markers = "implementation_name == \"pypy\""}
 
 [[package]]
 name = "quantconnect-stubs"
-version = "17178"
+version = "17340"
 description = "Type stubs for QuantConnect's Lean"
 optional = false
 python-versions = "*"
 files = [
-    {file = "quantconnect_stubs-17178-py3-none-any.whl", hash = "sha256:13a0a0a4c07c1f2dbd06936bc34f9ae5471c5d1e67736526e6d45138ec6fa67b"},
-    {file = "quantconnect_stubs-17178.tar.gz", hash = "sha256:c9a7423a97f774bb8cbf585b61a9888b9cbf417873257ad0b60069b55334683e"},
+    {file = "quantconnect_stubs-17340-py3-none-any.whl", hash = "sha256:66830fa2cb683b258311e860ea3b63d6009d9daa6ff961f73189918e4df88393"},
+    {file = "quantconnect_stubs-17340.tar.gz", hash = "sha256:030db0af631221264d457fc8edca04c6e2161a9518f25630e6a305d7c9263cb3"},
 ]
 
 [package.dependencies]
