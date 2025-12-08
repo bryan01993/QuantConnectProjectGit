@@ -234,8 +234,8 @@ class EarningsVolatilityCrunch(QCAlgorithm):
             # else:
             #     self.Debug("No option pairs stored in results.")
         # --- modify OnData(), inside/near your `if self.trade_all:` branch ---
-        if self.trade_all and all(v is not None for v in (slopes, ivrv_ratio, vol_ratio)):
-            self.Debug(f"initial conditions passed: slope {slopes['slope']}, ivrv_ratio {ivrv_ratio}, vol_ratio {vol_ratio}")
+        if self.trade_all and self.contract_results:
+            # self.Debug(f"initial conditions passed: {len(self.contract_results)} pairs")
             if getattr(self, "_candidates_built_at", None) != self.Time:
                 self._candidates_built_at = self.Time
 
@@ -248,68 +248,48 @@ class EarningsVolatilityCrunch(QCAlgorithm):
             candidates_by_underlying = defaultdict(list)
 
             # 2) iterate over your universe / chains as you already do
-            # (Example variable names below: adapt to your current ones)
-            for symbol in self.contract_results:  # <-- your list of symbols for this bar
-                if symbol is None:
-                    continue
+            for (front_contract, back_contract), metrics in self.contract_results.items():
+                symbol = front_contract.Underlying
 
                 # (A) obtain your precomputed analytics for this underlying
-                # Replace the getters below with your real sources
-                slope = slopes['slope']
-                ivrv_ratio = ivrv_ratio
-                vol_ratio = vol_ratio
+                slope = metrics['slope']
+                ivrv_ratio = metrics['ivrv']
+                vol_ratio = metrics['vol_ratio']
 
-                # (B) get your near/far candidate contracts (you already have this logic)
-                # Make sure both lists are filtered to your policy (same strike/right etc.)
-                self.near_candidates = {}
-                self.far_candidates = {}
-                near_list = self.near_candidates.get(symbol, [])  # list[Symbol] or list[OptionContract]
-                far_list = self.far_candidates.get(symbol, [])  # list[Symbol] or list[OptionContract]
+                if slope is None or ivrv_ratio is None or vol_ratio is None:
+                    continue
 
-                # (C) Construct candidate rows (NO orders here)
-                # Important: keep pairs consistent (same right & strike). If your code already matches them,
-                # you can iterate matched pairs directly. Otherwise, do a keyed join by (right,strike).
-                # Below is a safe join-by-key pattern:
-                by_key_near = {}
-                for nc in near_list:
-                    key = (nc.ID.OptionRight, float(nc.ID.StrikePrice))
-                    # Keep best near per key if you need (e.g., closest to target DTE); for now first seen
-                    by_key_near.setdefault(key, nc)
+                # (B) Construct candidate rows (NO orders here)
+                # We already have the matched pair (front_contract, back_contract) from the loop key
+                
+                calendar_id, row = self._row_from_pair(symbol, front_contract, back_contract, slope, ivrv_ratio, vol_ratio)
 
-                for fc in far_list:
-                    key = (fc.ID.OptionRight, float(fc.ID.StrikePrice))
-                    nc = by_key_near.get(key)
-                    if nc is None:
-                        continue  # no matching near for this far
+                # de-dup within this bar
+                if calendar_id in self._calendars_seen_this_bar:
+                    continue
 
-                    calendar_id, row = self._row_from_pair(symbol, nc, fc, slope, ivrv_ratio, vol_ratio)
-
-                    # de-dup within this bar
-                    if calendar_id in self._calendars_seen_this_bar:
-                        continue
-
-                    self._calendars_seen_this_bar.add(calendar_id)
-                    candidates_by_underlying[str(symbol)].append(row)
+                self._calendars_seen_this_bar.add(calendar_id)
+                candidates_by_underlying[str(symbol)].append(row)
 
             # 3) publish snapshot for later ranking/placement stage
             self.calendar_candidates = dict(candidates_by_underlying)
             # Optional tiny debug:
             self.Debug(f"[{self.Time}] candidates: {sum(len(v) for v in self.calendar_candidates.values())}")
             pass
-        # if self.trade_all:
-        #     for (front_contract, back_contract), m in self.contract_results.items():
-        #         slope_ok = m["slope"]
-        #         volume_ok = m["vol_ratio"]
-        #         ivrv_ok = m["ivrv"]
-        #         if slope_ok and volume_ok and ivrv_ok:
-        #             # ensure strike in metrics for tagging
-        #             m["strike"] = float(front_contract.ID.StrikePrice)
-        #             self.place_tagged_calendar(symbol=front_contract.Underlying,
-        #                                        front_contract=front_contract,
-        #                                        back_contract=back_contract,
-        #                                        qty=1,
-        #                                        metrics=m,
-        #                                        long_calendar=True)
+        if self.trade_all:
+            for (front_contract, back_contract), m in self.contract_results.items():
+                slope_ok = m["slope"]
+                volume_ok = m["vol_ratio"]
+                ivrv_ok = m["ivrv"]
+                if slope_ok and volume_ok and ivrv_ok:
+                    # ensure strike in metrics for tagging
+                    m["strike"] = float(front_contract.ID.StrikePrice)
+                    self.place_tagged_calendar(symbol=front_contract.Underlying,
+                                               front_contract=front_contract,
+                                               back_contract=back_contract,
+                                               qty=1,
+                                               metrics=m,
+                                               long_calendar=True)
 
         #     ### TO IMPLEMENT LATER ###
         #     option_symbol = self.AddOption(symbol, Resolution.HOUR)
