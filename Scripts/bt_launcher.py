@@ -44,10 +44,18 @@ def main():
     push_project_to_cloud(cmd_vars)
 
     # Placeholder for formatting backtesting command
-    command_string = format_command(cmd_vars)
+    command_string, backtest_id = format_command(cmd_vars)
 
-    # Optionally run the formatted command (if needed)
-    run_command(command_string)
+    # Run the formatted command and check for success
+    if run_command(command_string):
+        logging.info("Backtest triggered successfully.")
+        
+        # Chain the handler execution
+        handler_command = f"poetry run python bt_handler.py {backtest_id}"
+        logging.info(f"Triggering handler: {handler_command}")
+        run_command(handler_command)
+    else:
+        logging.error("Backtest failed to start or complete successfully. Handler will not be triggered.")
 
 
 # Define function to parse command-line arguments
@@ -138,7 +146,7 @@ def format_command(cmd_vars):
     # Format the command used for cloud backtesting based on cmd_vars
     command = f"lean cloud backtest {cmd_vars['cmd_algo_code']}_{cmd_vars['cmd_algo_name']} --name {backtest_id}"
     print(f"{command}")
-    return command
+    return command, backtest_id
 
 
 # Define function to push the project to the cloud
@@ -160,8 +168,10 @@ def run_command(command_string):
     # Run the command in a subprocess
     try:
         subprocess.run(command_string, shell=True, check=True)
+        return True
     except subprocess.CalledProcessError as e:
         logging.error(f"Command failed with error: {e}")
+        return False
 
 
 # Call the main function if the script is executed

@@ -9,7 +9,7 @@ from QuantConnect.Securities import *
 from collections import defaultdict
 from math import log, sqrt, exp
 from scipy.stats import norm
-from QuantConnect.Securities.Option import QLOptionPriceModel
+from QuantConnect.Securities.Option import QLOptionPriceModel, NullOptionAssignmentModel
 from QuantConnect.Orders import UpdateOrderFields
 from datetime import timedelta, datetime, date
 import pandas as pd
@@ -57,7 +57,7 @@ class EarningsVolatilityCrunch(QCAlgorithm):
         # --- Run OnData on a daily cadence ---
         # Use daily resolution across the board so OnData fires once per trading day
         self.UniverseSettings.Resolution = Resolution.DAILY
-        self.UniverseSettings.FillForward = False
+        self.UniverseSettings.FillForward = True
 
         # Brokerage & fee model (Interactive Brokers)
         self.SetBrokerageModel(BrokerageName.INTERACTIVE_BROKERS_BROKERAGE)
@@ -155,12 +155,7 @@ class EarningsVolatilityCrunch(QCAlgorithm):
         if self.IsWarmingUp:  # Ensure Algo has warmed
             return
 
-        for kvp in self.Portfolio:  # Loop through Portfolio
-            symbol = kvp.Key
-            holding = kvp.Value
-
-            if holding.Invested and symbol.ID.SecurityType == SecurityType.Equity:  # Eliminate Equities from Portfolio
-                self.Liquidate(symbol, tag=f"[{self.Time}] OnData flatten equities")
+        self.manage_open_positions()
 
         if self.pending_option_orders:  # drain pending orders that now have prices
             still_pending = []
@@ -233,6 +228,39 @@ class EarningsVolatilityCrunch(QCAlgorithm):
             #         self.Log('Jump to next OnData')
             # else:
             #     self.Debug("No option pairs stored in results.")
+
+        # --- Filter to keep only the best pair per symbol ---
+        if self.contract_results:
+            best_results = {}
+            from collections import defaultdict
+            grouped_by_symbol = defaultdict(list)
+
+            for (front, back), metrics in self.contract_results.items():
+                grouped_by_symbol[front.Underlying].append(((front, back), metrics))
+
+            for symbol, pairs in grouped_by_symbol.items():
+                # Sort criteria: slope DESC, ivrv DESC, vol_ratio DESC
+                # Handle Nones by treating them as -infinity
+                def sort_key(item):
+                    _, m = item
+                    s = m.get('slope')
+                    i = m.get('ivrv')
+                    v = m.get('vol_ratio')
+                    return (
+                        s if s is not None else -float('inf'),
+                        i if i is not None else -float('inf'),
+                        v if v is not None else -float('inf')
+                    )
+
+                # Sort descending to get highest values first
+                pairs.sort(key=sort_key, reverse=True)
+
+                # Take the best one
+                best_pair, best_metrics = pairs[0]
+                best_results[best_pair] = best_metrics
+
+            self.contract_results = best_results
+
         # --- modify OnData(), inside/near your `if self.trade_all:` branch ---
         if self.trade_all and self.contract_results:
             # self.Debug(f"initial conditions passed: {len(self.contract_results)} pairs")
@@ -308,9 +336,73 @@ class EarningsVolatilityCrunch(QCAlgorithm):
             self.Debug("[FINAL] All positions closed before backtest end.")
 
     ### Functions Start ###
+
+    @monitor_execution
+    def manage_open_positions(self):
+        """
+        Manages open option positions:
+        - Closes Short ITM/ATM options if <= 1 DTE.
+        - Closes Long ITM options if <= 1 DTE (to prevent exercise).
+        - Allows OTM options to expire.
+        """
+        options_to_liquidate = []
+
+        for kvp in self.Portfolio:
+            symbol = kvp.Key
+            holding = kvp.Value
+
+            if holding.Invested and symbol.ID.SecurityType == SecurityType.Equity:  # Eliminate Equities from Portfolio
+                self.Liquidate(symbol, tag=f"[{self.Time}] OnData flatten equities")
+
+            # Only care about invested Options
+            if not holding.Invested or symbol.SecurityType != SecurityType.Option:
+                continue
+
+            # Calculate DTE (Days to Expiry)
+            expiry = symbol.ID.Date.date()
+            # If OnData is daily (midnight), self.Time.date() might be 'today'.
+            # DTE = (expiry - now).days.
+            dte = (expiry - self.Time.date()).days
+
+            # We care about things expiring very soon (<= 1 day)
+            if dte <= 1:
+                security = self.Securities[symbol]
+                price = security.Price
+                strike = symbol.ID.StrikePrice
+                right = symbol.ID.OptionRight
+
+                # Helper for Moneyness
+                # ITM for Call: Price > Strike
+                # ITM for Put: Price < Strike
+                # We treat "AT or IN" as inclusive
+                is_atm_or_itm = False
+                if right == OptionRight.Call:
+                    if price >= strike:
+                        is_atm_or_itm = True
+                elif right == OptionRight.Put:
+                    if price <= strike:
+                        is_atm_or_itm = True
+
+                # Logic per side
+                if holding.IsShort:
+                    # Short: "if they are 1 day away from expiry and are AT or IN the money they get closed for their loss."
+                    # OTM (else) are let expire worthless (do nothing).
+                    if is_atm_or_itm:
+                        options_to_liquidate.append((symbol, f"Closing Short ITM/ATM (DTE={dte})"))
+
+                elif holding.IsLong:
+                    # Long: "Longed options are held to maturity BUT never executed"
+                    # Implies: Close if ITM (to prevent exercise). Let expire if OTM.
+                    if is_atm_or_itm:
+                        options_to_liquidate.append((symbol, f"Closing Long ITM (DTE={dte}) to prevent exercise"))
+
+        for symbol, tag in options_to_liquidate:
+            self.Liquidate(symbol, tag=tag)
+
     def _ensure_option_tradable(self, contract: Symbol, res=Resolution.Hour):
         if not self.Securities.ContainsKey(contract):
-            self.AddOptionContract(contract, res)  # adds underlying too
+            o = self.AddOptionContract(contract, res)  # adds underlying too
+            o.SetOptionAssignmentModel(NullOptionAssignmentModel())
         u = contract.Underlying
         if self.Securities.ContainsKey(u):
             self.Securities[u].SetDataNormalizationMode(DataNormalizationMode.Raw)
@@ -514,6 +606,7 @@ class EarningsVolatilityCrunch(QCAlgorithm):
 
         return float('nan') if rv <= 0 else float(iv_annualized / rv)
 
+    @monitor_execution
     def purge_old_earnings_data(self, purge_days: int = 15) -> None:
         cutoff = self.Time - timedelta(days=purge_days)
         before_count = len(self.earnings_calendar)
@@ -719,6 +812,7 @@ class EarningsVolatilityCrunch(QCAlgorithm):
         back_list = _atm_pair(contracts_by_exp.get(back_exp, []))
         return front_list, back_list
 
+    @monitor_execution
     def get_calls_up_to_two_strikes(self, symbol: Symbol, earnings_time: datetime) -> List[Symbol]:
         """
         Return all CALL option contracts for `symbol` that:
@@ -768,11 +862,11 @@ class EarningsVolatilityCrunch(QCAlgorithm):
         From a list of option Symbols, return all pairs (near, next) such that:
         - Same strike and option right (call/put).
         - Different expiration dates.
-        Produces all expiry combinations (E1,E2), (E1,E3), … not just consecutive.
+        Produces only consecutive expiry combinations (E1,E2), (E2,E3) to avoid duplicating the near leg.
         """
         from collections import defaultdict
         from typing import List, Tuple
-        import itertools
+
         if not contracts:
             return []
 
@@ -786,8 +880,8 @@ class EarningsVolatilityCrunch(QCAlgorithm):
         for key, lst in buckets.items():
             # Sort contracts by expiry
             lst.sort(key=lambda x: x.ID.Date)
-            # All combinations of 2 different expiries
-            for near, far in itertools.combinations(lst, 2):
+            # Only pair consecutive contracts to avoid duplicating the front contract
+            for near, far in zip(lst, lst[1:]):
                 matches.append((near, far))
 
         return matches[:20]  # keep top 20 if needed

@@ -3,7 +3,7 @@
     "parameters": {
         "exec.initial_amount": "10000000.0",
         "exec.start_date": "2023-01-05",
-        "exec.end_date": "2023-03-10",
+        "exec.end_date": "2023-12-10",
         "univ.coarse.dollar_volume": "1000000",
         "univ.coarse.min_price": "30",
         "univ.coarse.max_price": "500",
