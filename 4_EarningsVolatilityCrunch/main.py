@@ -139,7 +139,8 @@ class EarningsVolatilityCrunch(QCAlgorithm):
                 if self.OptionChainProvider.GetOptionContractList(e.Symbol, self.Time):
                     selected.append(e.Symbol)
                     self.earnings_calendar[e.Symbol] = e.ReportDate
-                    self.AddEquity(e.Symbol, Resolution.DAILY)
+                    eq = self.AddEquity(e.Symbol, Resolution.DAILY)
+                    eq.SetDataNormalizationMode(DataNormalizationMode.Raw)
 
                     # stop once we have 20
                     if len(selected) >= max_items:

@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Iterable
 from google.cloud import bigquery
 from google.api_core.exceptions import GoogleAPICallError, RetryError, ServiceUnavailable
 from requests.exceptions import SSLError as RequestsSSLError
+from google.oauth2 import service_account
 # If you run into cross-partition or cross-filesystem issues with os.rename, consider using shutil.move.
 import shutil
 
@@ -19,6 +20,26 @@ def safe_move(src: str, dst: str) -> None:
         dst = f"{base}_{int(time.time())}{ext}"
     shutil.move(src, dst)
     print(f"File moved to {dst}")
+
+
+def get_bigquery_client(project_id='bav-personal-cloud') -> bigquery.Client:
+    """
+    Returns a BigQuery client.
+    First checks for a Service Account key in Resources/gcp_keys.json.
+    If found, uses it. Otherwise, falls back to Application Default Credentials.
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    # Assuming Resources is at the project root, which is one level up from scripts
+    key_path = os.path.abspath(os.path.join(script_dir, "..", "Resources", "gcp_keys.json"))
+
+    if os.path.exists(key_path):
+        print(f"Authenticating with service account key: {key_path}")
+        credentials = service_account.Credentials.from_service_account_file(key_path)
+        return bigquery.Client(project=project_id, credentials=credentials)
+    else:
+        print("Authenticating with Application Default Credentials (ADC)")
+        return bigquery.Client(project=project_id)
+
 
 def guess_backtest_id_from_filename(file_name: str) -> Optional[str]:
     """
@@ -139,7 +160,8 @@ def load_json_to_bigquery(json_file_path, dataset_id):
     After upload (or if already uploaded), move the file to the respective 'already_uploaded_*' folder.
     """
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    client = bigquery.Client(project='bav-personal-cloud')
+    # Use helper to get client with explicit credentials if available
+    client = get_bigquery_client()
 
     file_name = os.path.basename(json_file_path)
     is_orders = file_name.endswith("_orders.json")
@@ -214,6 +236,17 @@ def load_json_to_bigquery(json_file_path, dataset_id):
 
     with open(json_file_path, 'r') as f:
         data = json.load(f)
+
+    # Check if 'backtest' key exists (it might be missing if the backtest failed or wasn't found)
+    if not data.get("backtest"):
+        print(f"Warning: 'backtest' key missing in {file_name}. Likely a failed backtest or invalid ID.")
+        print(f"Data received: {json.dumps(data, indent=2)}")
+        
+        # TODO: if that is the case uploads the results based on the backtestId and the Error in the corresponding table
+        
+        print(f"Skipping detailed stats upload for {file_name}. Moving to uploaded folder.")
+        safe_move(json_file_path, destination_file)
+        return
 
     print("Loading backtest data...")
     load_backtest(data, client, dataset_id)

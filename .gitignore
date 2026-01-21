@@ -1,1 +1,3 @@
 /.venv/
+# Google Cloud
+gcp_keys.json

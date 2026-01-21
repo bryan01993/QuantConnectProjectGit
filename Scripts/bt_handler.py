@@ -272,9 +272,13 @@ def write_results_to_database(results_path, backtest_id):
     try:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         database_writer_script = os.path.join(script_dir, "db_operator.py")
+        
+        # Use sys.executable to ensure we use the same python interpreter (Poetry env)
+        import sys
+        
         db_write_command = (
-            f"python {database_writer_script} "
-            f"--results-path {results_path} --backtest-id {backtest_id}"
+            f'"{sys.executable}" "{database_writer_script}" '
+            f"--results-path \"{results_path}\" --backtest-id {backtest_id}"
         )
         logging.info(f"Calling database writer script for backtest ID: {backtest_id}")
         subprocess.run(db_write_command, shell=True, check=True)
