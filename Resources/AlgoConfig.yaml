@@ -73,3 +73,17 @@ ALGOS:
           ALGO_PARAM_1_STEP: 5
       - ALGO_PARAM_2: "full"
     ALGO_SHORT_NAME: "4EVC"
+  - <<: *defaults
+    ALGO_CODE: 5
+    ALGO_NAME: "EarningsVolatilityRamp"
+    ALGO_MAYUS_LETTERS: "EVR"
+    ALGO_PUBLIC_NAME: "Clinton"
+    ALGO_VERSION: 1
+    ALGO_PARAMETRY:
+      - ALGO_PARAM_1:
+          ALGO_PARAM_1_DEFAULT: 15
+          ALGO_PARAM_1_MIN: 10
+          ALGO_PARAM_1_MAX: 20
+          ALGO_PARAM_1_STEP: 5
+      - ALGO_PARAM_2: "full"
+    ALGO_SHORT_NAME: "5EVR"
