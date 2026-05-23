@@ -1,0 +1,16 @@
+{
+    "default": {
+        "const": 3.3773,
+        "implied_to_last_implied_ratio": -0.9596,
+        "gap_implied_last_realized": -0.1880,
+        "gap_implied_hist_avg_realized": -0.6233,
+        "implied_hist_avg_implied_ratio": -1.1505
+    },
+    "2024": {
+        "const": 3.3773,
+        "implied_to_last_implied_ratio": -0.9596,
+        "gap_implied_last_realized": -0.1880,
+        "gap_implied_hist_avg_realized": -0.6233,
+        "implied_hist_avg_implied_ratio": -1.1505
+    }
+}
