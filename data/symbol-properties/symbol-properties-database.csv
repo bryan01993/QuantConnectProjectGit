@@ -210,8 +210,11 @@ usa,NQX,indexoption,Nasdaq-100 Reduced-Value Index Options,USD,100,0.05,1,,,,5
 usa,RUT,index,,USD,1,0.001,1
 usa,AEX,index,,EUR,1,0.01,1
 
+cboe,[*],index,,USD,1,0.01,1
+
 # for backwards compatibility, order here is important for futures, since we could have the same symbol for more than 1 market in which case Lean will use the first
 cfe,VX,future,VIX futures ,USD,1000.0,0.05,1.0
+cfe,VXM,future,VIX Mini Futures,USD,100.0,0.01,1.0
 cbot,2YY,future,Micro 2-Year Yield Futures,USD,1000,0.001,1
 cbot,5YY,future,Micro 5-Year Yield Futures,USD,1000,0.001,1
 cbot,10Y,future,Micro 10-Year Yield Futures,USD,1000,0.001,1
@@ -270,7 +273,7 @@ cme,FT5,future,E-mini FTSE China Futures,USD,2.0,2.5,1.0
 cme,FTU,future,E-mini FTSE 100 USD Futures,USD,50.0,0.1,1.0
 cme,GD,future,S&P-GSCI Commodity Index Futures,USD,250.0,0.05,1.0
 cme,GE,future,Eurodollar Futures,USD,2500.0,0.0025,1.0
-cme,GF,future,Feeder Cattle Futures,USD,50000.0,0.025,1.0,,1,100
+cme,GF,future,Feeder Cattle Futures,USD,50000.0,0.00025,1.0,,1,100
 cme,HE,future,Lean Hog Futures,USD,40000.0,0.00025,1.0,,1,100
 cme,IBV,future,USD-Denominated Ibovespa Index Futures,USD,1.0,5.0,1.0
 cme,J7,future,E-mini Japanese Yen Futures,USD,6250000.0,1e-06,1.0
@@ -412,6 +415,9 @@ hkfe,[*],index,,HKD,1,0.01,1
 
 ose,[*],index,,JPY,1,0.01,1
 
+krx,KM,future,KOSPI 200 Index Futures,KRW,250000,0.05,1.0
+krx,[*],index,,KRW,1,0.01,1
+
 # Futures options -- will default to Futures contract specs in case no entry exists
 cbot,OZB,futureoption,U.S. Treasury Bond American Futures Options,USD,1000.0,0.015625,1.0
 cbot,OZC,futureoption,Corn American Futures Options,USD,5000.0,0.00125,1.0,,,100
@@ -523,6 +529,7 @@ oanda,USDHKD,forex,USD/HKD,HKD,1,0.00001,1
 oanda,USDHUF,forex,USD/HUF,HUF,1,0.001,1
 oanda,USDINR,forex,USD/INR,INR,1,0.001,1
 oanda,USDJPY,forex,USD/JPY,JPY,1,0.001,1
+oanda,USDKRW,forex,USD/KRW,KRW,1,0.01,1
 oanda,USDMXN,forex,USD/MXN,MXN,1,0.00001,1
 oanda,USDNOK,forex,USD/NOK,NOK,1,0.00001,1
 oanda,USDPLN,forex,USD/PLN,PLN,1,0.00001,1
