@@ -1,3 +1,28 @@
 /.venv/
-# Google Cloud
+# Google Cloud & Security Keys
 gcp_keys.json
+Resources/gcp_keys.json
+
+# Media & Videos
+Videos/
+
+# QuantConnect Data & Cache
+data/
+data/**
+.QuantConnect/
+
+# Algorithm Backtests, Results, Orders & Logs
+**/backtests/
+**/backtest_results/
+**/already_uploaded_backtest_results/
+**/orders_results/
+**/already_uploaded_orders_results/
+**/backtest_logs/
+
+# Python Cache & IDE Workspaces
+__pycache__/
+*.pyc
+.pytest_cache/
+*.code-workspace
+Workspace/
+"Recycle Bin/"
