@@ -632,10 +632,16 @@ def handle_batch_poll(request: Any) -> tuple[str, int]:
                     while True:
                         end_idx = start_idx + step
                         orders_payload = {"start": start_idx, "end": end_idx, "projectId": int(QC_PROJECT_ID), "backtestId": bt_id}
-                        ord_resp = requests.post(orders_url, headers=make_qc_headers(), json=orders_payload, timeout=30)
-                        if ord_resp.status_code != 200:
+                        for attempt in range(15):
+                            ord_resp = requests.post(orders_url, headers=make_qc_headers(), json=orders_payload, timeout=30)
+                            if ord_resp.status_code != 200:
+                                ord_data = {}
+                                break
+                            ord_data = ord_resp.json()
+                            if ord_data.get("status") == "loading":
+                                time.sleep(3)
+                                continue
                             break
-                        ord_data = ord_resp.json()
                         if not ord_data.get("success"):
                             break
                         page_orders = ord_data.get("orders", [])

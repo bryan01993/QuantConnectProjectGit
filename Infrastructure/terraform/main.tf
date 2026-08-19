@@ -140,7 +140,7 @@ resource "google_cloudfunctions2_function" "qc_batch_poller_func" {
     min_instance_count               = 0    # 0 instances when idle -> BILLED $0 WHEN IDLE
     max_instance_count               = 1    # Hard limit of 1 max instance -> PREVENTS SCALING COST RUNAWAYS
     available_memory                 = "256Mi" # Smallest memory footprint
-    timeout_seconds                  = 60   # Max execution duration limit
+    timeout_seconds                  = 300  # Max execution duration limit (5 mins)
     max_instance_request_concurrency = 1
     service_account_email            = google_service_account.poller_sa.email
 

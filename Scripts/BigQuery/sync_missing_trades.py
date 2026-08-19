@@ -23,7 +23,7 @@ def get_backtests_missing_trades(client) -> List[Dict[str, Any]]:
     LEFT JOIN `{PROJECT_ID}.{DATASET_ID}.BTOPTrades` t 
       ON r.backtestId = t.backtestId
     GROUP BY r.backtestId, r.name, r.projectId
-    HAVING COUNT(t.pk) = 0
+    HAVING COUNTIF(t.vol_ratio IS NOT NULL) = 0 AND COUNTIF(t.pk NOT LIKE '%_PLACEHOLDER') = 0
     ORDER BY r.backtestId
     """
     logger.info("Querying BigQuery for backtests missing trade records in BTOPTrades...")

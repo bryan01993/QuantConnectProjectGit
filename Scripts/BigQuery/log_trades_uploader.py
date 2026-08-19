@@ -675,7 +675,6 @@ def upload_trade_records(trade_records: List[dict] | None = None) -> None:
 
     print(f"Found {len(log_files)} log files, {len(object_store_files)} ObjectStore JSON files, and {len(orders_json_files)} orders JSON files to process.")
 
-    new_rows = []
     # 1. Parse ObjectStore JSON files (downloaded from QC API / ObjectStore)
     for file_path in object_store_files:
         parsed_rows = parse_object_store_file(file_path)
