@@ -1,0 +1,1133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QuantConnect BigQuery Data Warehouse ERD",
+  "project_id": "bav-personal-cloud",
+  "dataset_id": "develop",
+  "description": "Complete Entity-Relationship Diagram (ERD) mapping all BigQuery tables, views, primary keys, foreign keys, column documentation strings, and cardinality.",
+  "entities": {
+    "BTOPResults": {
+      "type": "TABLE",
+      "description": "Primary metadata table for QuantConnect cloud and local backtest executions.",
+      "primary_key": [
+        "backtestId"
+      ],
+      "fields": {
+        "backtestId": {
+          "type": "STRING",
+          "mode": "REQUIRED",
+          "description": "Unique 32-character hexadecimal backtest run identifier (Primary Key)."
+        },
+        "name": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Human-readable name of the backtest execution (e.g. BT_4EVC_V1_20260727_173024)."
+        },
+        "note": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Optional user notes or research labels attached to the backtest."
+        },
+        "organizationId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "QuantConnect Organization ID."
+        },
+        "projectId": {
+          "type": "INTEGER",
+          "mode": "NULLABLE",
+          "description": "QuantConnect Project ID (e.g., 22447448 for 4EVC)."
+        },
+        "completed": {
+          "type": "BOOLEAN",
+          "mode": "NULLABLE",
+          "description": "Flag indicating whether backtest execution finished cleanly."
+        },
+        "optimizationId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "ID of parent optimization job if launched as part of a parameter sweep."
+        },
+        "tradeableDates": {
+          "type": "INTEGER",
+          "mode": "NULLABLE",
+          "description": "Count of market trading days spanned by the backtest."
+        },
+        "backtestStart": {
+          "type": "TIMESTAMP",
+          "mode": "NULLABLE",
+          "description": "UTC timestamp of the backtest simulation start date."
+        },
+        "backtestEnd": {
+          "type": "TIMESTAMP",
+          "mode": "NULLABLE",
+          "description": "UTC timestamp of the backtest simulation end date."
+        },
+        "created": {
+          "type": "TIMESTAMP",
+          "mode": "NULLABLE",
+          "description": "UTC timestamp when the backtest run was submitted to cloud/launched."
+        },
+        "snapshotId": {
+          "type": "INTEGER",
+          "mode": "NULLABLE",
+          "description": "QuantConnect code snapshot ID for reproducibility."
+        },
+        "status": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Execution status string (e.g., Completed, Runtime Error)."
+        },
+        "error": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "High-level runtime or compilation error message if backtest failed."
+        },
+        "stacktrace": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Python or C# exception stacktrace if backtest failed."
+        },
+        "progress": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Completion percentage decimal (0.0 to 1.0)."
+        },
+        "hasInitializeError": {
+          "type": "BOOLEAN",
+          "mode": "NULLABLE",
+          "description": "True if an exception occurred during Initialize()."
+        },
+        "nodeName": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "QuantConnect compute node type used (e.g., L2-8)."
+        },
+        "outOfSampleMaxEndDate": {
+          "type": "DATETIME",
+          "mode": "NULLABLE",
+          "description": "Maximum allowed end date for out-of-sample testing."
+        },
+        "outOfSampleDays": {
+          "type": "INTEGER",
+          "mode": "NULLABLE",
+          "description": "Number of out-of-sample testing days reserved."
+        }
+      }
+    },
+    "BTOPTrades": {
+      "type": "TABLE",
+      "description": "Custom high-resolution option trade logs and quantitative signal factors streamed from algorithm execution.",
+      "primary_key": [
+        "pk"
+      ],
+      "foreign_keys": [
+        {
+          "column": "backtest_run_id",
+          "references": {
+            "table": "BTOPResults",
+            "column": "backtestId"
+          },
+          "relationship": "MANY_TO_ONE"
+        },
+        {
+          "column": "batch_id",
+          "references": {
+            "table": "BTOPBatchChunks",
+            "column": "batch_id"
+          },
+          "relationship": "MANY_TO_ONE"
+        }
+      ],
+      "fields": {
+        "pk": {
+          "type": "STRING",
+          "mode": "REQUIRED",
+          "description": "Composite Primary Key formatted as <backtest_run_id>_<underlying>_<sequence_id>."
+        },
+        "backtest_run_id": {
+          "type": "STRING",
+          "mode": "REQUIRED",
+          "description": "Foreign Key referencing BTOPResults.backtestId."
+        },
+        "algo_code": {
+          "type": "STRING",
+          "mode": "REQUIRED",
+          "description": "Short code identifying active strategy (e.g. 4EVC, 0AT)."
+        },
+        "timestamp": {
+          "type": "TIMESTAMP",
+          "mode": "REQUIRED",
+          "description": "UTC timestamp of the trade execution event."
+        },
+        "underlying": {
+          "type": "STRING",
+          "mode": "REQUIRED",
+          "description": "Underlying equity ticker symbol (e.g., AAPL, TSLA)."
+        },
+        "action": {
+          "type": "STRING",
+          "mode": "REQUIRED",
+          "description": "Trade action type: OPEN or CLOSE."
+        },
+        "qty": {
+          "type": "INTEGER",
+          "mode": "REQUIRED",
+          "description": "Number of contracts or shares traded."
+        },
+        "strike": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Strike price of option legs (null if equity)."
+        },
+        "near_expiry": {
+          "type": "DATE",
+          "mode": "NULLABLE",
+          "description": "Expiration date of front/near option leg."
+        },
+        "far_expiry": {
+          "type": "DATE",
+          "mode": "NULLABLE",
+          "description": "Expiration date of back/far option leg."
+        },
+        "vol_ratio": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Front-to-back implied volatility ratio at entry."
+        },
+        "slope": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Implied volatility term structure slope at entry."
+        },
+        "ivrv_ratio": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "IV to Realized Volatility ratio at entry."
+        },
+        "entry_price": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Price/debit paid when position opened."
+        },
+        "exit_price": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Price/credit received when position closed."
+        },
+        "pnl": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Net dollar profit/loss for the trade leg."
+        },
+        "parameters": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "JSON string of signal parameters at entry."
+        },
+        "exit_reason": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Normalized exit reason (e.g., STOP_LOSS, TAKE_PROFIT, EXPIRATION)."
+        },
+        "batch_id": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Foreign Key referencing BTOPBatchChunks.batch_id if run as chunked batch."
+        },
+        "chunk_index": {
+          "type": "INTEGER",
+          "mode": "NULLABLE",
+          "description": "Sequential chunk index within batch execution."
+        }
+      }
+    },
+    "BTOPBatchChunks": {
+      "type": "TABLE",
+      "description": "Multi-period chunked batch backtest execution and serverless ingestion tracking.",
+      "primary_key": [
+        "batch_id",
+        "chunk_index"
+      ],
+      "foreign_keys": [
+        {
+          "column": "backtest_id",
+          "references": {
+            "table": "BTOPResults",
+            "column": "backtestId"
+          },
+          "relationship": "ONE_TO_ONE"
+        }
+      ],
+      "fields": {
+        "batch_id": {
+          "type": "STRING",
+          "mode": "REQUIRED",
+          "description": "Primary Key identifying the multi-year batch run (e.g. BATCH_4EVC_V1_20260727_201356)."
+        },
+        "backtest_id": {
+          "type": "STRING",
+          "mode": "REQUIRED",
+          "description": "Foreign Key referencing BTOPResults.backtestId for this chunk."
+        },
+        "algo_code": {
+          "type": "STRING",
+          "mode": "REQUIRED",
+          "description": "Strategy algorithm short code (e.g. 4EVC)."
+        },
+        "chunk_index": {
+          "type": "INTEGER",
+          "mode": "REQUIRED",
+          "description": "Sequential index of the date chunk within batch (1..N)."
+        },
+        "start_date": {
+          "type": "DATE",
+          "mode": "NULLABLE",
+          "description": "Start date boundary for backtest chunk."
+        },
+        "end_date": {
+          "type": "DATE",
+          "mode": "NULLABLE",
+          "description": "End date boundary for backtest chunk."
+        },
+        "status": {
+          "type": "STRING",
+          "mode": "REQUIRED",
+          "description": "Ingestion status: PENDING, RUNNING, COMPLETED, FAILED."
+        },
+        "created_at": {
+          "type": "TIMESTAMP",
+          "mode": "REQUIRED",
+          "description": "UTC timestamp when batch chunk was registered."
+        },
+        "updated_at": {
+          "type": "TIMESTAMP",
+          "mode": "NULLABLE",
+          "description": "UTC timestamp when status was updated."
+        }
+      }
+    },
+    "BTOPOrders": {
+      "type": "TABLE",
+      "description": "Raw QuantConnect broker order events and fill logs.",
+      "foreign_keys": [
+        {
+          "column": "backtestId",
+          "references": {
+            "table": "BTOPResults",
+            "column": "backtestId"
+          },
+          "relationship": "MANY_TO_ONE"
+        }
+      ],
+      "fields": {
+        "backtestId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Foreign Key referencing BTOPResults.backtestId."
+        },
+        "id": {
+          "type": "INTEGER",
+          "mode": "NULLABLE",
+          "description": "QuantConnect order ID within backtest run."
+        },
+        "contingentId": {
+          "type": "INTEGER",
+          "mode": "NULLABLE",
+          "description": "ID of parent order if contingent."
+        },
+        "brokerId": {
+          "type": "STRING",
+          "mode": "REPEATED",
+          "description": "Brokerage assigned order IDs."
+        },
+        "symbol": {
+          "type": "RECORD",
+          "mode": "NULLABLE",
+          "description": "Nested record containing symbol ticker, security type, market."
+        },
+        "limitPrice": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Limit order price limit."
+        },
+        "stopPrice": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Stop order trigger price."
+        },
+        "stopTriggered": {
+          "type": "BOOLEAN",
+          "mode": "NULLABLE",
+          "description": "True if stop order was triggered."
+        },
+        "price": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Fill price per share/contract."
+        },
+        "priceCurrency": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Currency of order (USD)."
+        },
+        "quantity": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Order quantity (positive long, negative short)."
+        },
+        "value": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Total dollar value of filled order."
+        },
+        "time": {
+          "type": "TIMESTAMP",
+          "mode": "NULLABLE",
+          "description": "UTC timestamp when order was placed."
+        },
+        "createdTime": {
+          "type": "TIMESTAMP",
+          "mode": "NULLABLE",
+          "description": "UTC timestamp when order created."
+        },
+        "lastFillTime": {
+          "type": "TIMESTAMP",
+          "mode": "NULLABLE",
+          "description": "UTC timestamp of last fill event."
+        },
+        "lastUpdateTime": {
+          "type": "TIMESTAMP",
+          "mode": "NULLABLE",
+          "description": "UTC timestamp of last update."
+        },
+        "canceledTime": {
+          "type": "TIMESTAMP",
+          "mode": "NULLABLE",
+          "description": "UTC timestamp when canceled."
+        },
+        "type": {
+          "type": "INTEGER",
+          "mode": "NULLABLE",
+          "description": "Order type enum (Market=0, Limit=1, StopMarket=2, OptionExercise=8)."
+        },
+        "status": {
+          "type": "INTEGER",
+          "mode": "NULLABLE",
+          "description": "Order status enum (Filled=3, Canceled=5, etc.)."
+        },
+        "securityType": {
+          "type": "INTEGER",
+          "mode": "NULLABLE",
+          "description": "Security type enum (Equity=0, Option=1, Future=2)."
+        },
+        "direction": {
+          "type": "INTEGER",
+          "mode": "NULLABLE",
+          "description": "Order direction (Buy=0, Sell=1)."
+        },
+        "tag": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Custom order tag string."
+        },
+        "orderSubmissionData": {
+          "type": "RECORD",
+          "mode": "NULLABLE",
+          "description": "Nested submission metadata (bid/ask at submission)."
+        },
+        "isMarketable": {
+          "type": "BOOLEAN",
+          "mode": "NULLABLE",
+          "description": "True if order crosses spread."
+        },
+        "properties": {
+          "type": "RECORD",
+          "mode": "NULLABLE",
+          "description": "Order execution properties."
+        },
+        "events": {
+          "type": "RECORD",
+          "mode": "REPEATED",
+          "description": "Fill events array."
+        },
+        "trailingAmount": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Trailing stop amount."
+        },
+        "trailingPercentage": {
+          "type": "BOOLEAN",
+          "mode": "NULLABLE",
+          "description": "True if trailing amount is percentage."
+        },
+        "groupOrderManager": {
+          "type": "RECORD",
+          "mode": "NULLABLE",
+          "description": "Group order manager for multi-leg option orders."
+        },
+        "triggerPrice": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Trigger price for conditional orders."
+        },
+        "triggerTouched": {
+          "type": "BOOLEAN",
+          "mode": "NULLABLE",
+          "description": "True if trigger price touched."
+        },
+        "_ingestedAt": {
+          "type": "TIMESTAMP",
+          "mode": "NULLABLE",
+          "description": "UTC timestamp when row streamed to BQ."
+        }
+      }
+    },
+    "BTOPTotalPerformancePortfolioStats": {
+      "type": "TABLE",
+      "description": "Platform-calculated portfolio performance metrics for each backtest.",
+      "foreign_keys": [
+        {
+          "column": "backtestId",
+          "references": {
+            "table": "BTOPResults",
+            "column": "backtestId"
+          },
+          "relationship": "ONE_TO_ONE"
+        }
+      ],
+      "fields": {
+        "portfolioStatId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Primary Key identifier formatted as <backtestId>_total_portfolio."
+        },
+        "backtestId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Foreign Key referencing BTOPResults.backtestId."
+        },
+        "averageWinRate": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Average win rate decimal across trade windows."
+        },
+        "averageLossRate": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Average loss rate decimal."
+        },
+        "profitLossRatio": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Average win dollar / average loss dollar ratio."
+        },
+        "winRate": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Overall backtest trade win rate percentage decimal."
+        },
+        "lossRate": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Overall backtest trade loss rate percentage decimal."
+        },
+        "expectancy": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Mathematical expectancy per trade dollar."
+        },
+        "startEquity": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Starting portfolio cash balance USD."
+        },
+        "endEquity": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Ending portfolio equity USD."
+        },
+        "compoundingAnnualReturn": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "CAGR annual return decimal."
+        },
+        "drawdown": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Peak-to-trough max drawdown percentage decimal."
+        },
+        "totalNetProfit": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Total net cumulative profit/loss decimal."
+        },
+        "sharpeRatio": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Annualized Sharpe Ratio."
+        },
+        "probabilisticSharpeRatio": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Probabilistic Sharpe Ratio (PSR)."
+        },
+        "sortinoRatio": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Annualized Sortino Ratio."
+        },
+        "alpha": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "CAPM Alpha vs Benchmark (SPY)."
+        },
+        "beta": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "CAPM Beta vs Benchmark (SPY)."
+        },
+        "annualStandardDeviation": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Annualized return standard deviation."
+        },
+        "annualVariance": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Annualized return variance."
+        },
+        "informationRatio": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Information Ratio vs Benchmark."
+        },
+        "trackingError": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Tracking Error vs Benchmark."
+        },
+        "treynorRatio": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Treynor Ratio."
+        },
+        "portfolioTurnover": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Annualized portfolio turnover ratio."
+        },
+        "valueAtRisk99": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "99% Value at Risk (VaR)."
+        },
+        "valueAtRisk95": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "95% Value at Risk (VaR)."
+        }
+      }
+    },
+    "BTOPTotalPerformanceTradeStats": {
+      "type": "TABLE",
+      "description": "Platform-calculated trade statistics summary per backtest.",
+      "foreign_keys": [
+        {
+          "column": "backtestId",
+          "references": {
+            "table": "BTOPResults",
+            "column": "backtestId"
+          },
+          "relationship": "ONE_TO_ONE"
+        }
+      ],
+      "fields": {
+        "tradeStatId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Primary Key identifier formatted as <backtestId>_total_trade."
+        },
+        "backtestId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Foreign Key referencing BTOPResults.backtestId."
+        },
+        "startDateTime": {
+          "type": "TIMESTAMP",
+          "mode": "NULLABLE",
+          "description": "Start timestamp of first closed trade."
+        },
+        "endDateTime": {
+          "type": "TIMESTAMP",
+          "mode": "NULLABLE",
+          "description": "End timestamp of last closed trade."
+        },
+        "totalNumberOfTrades": {
+          "type": "INTEGER",
+          "mode": "NULLABLE",
+          "description": "Total count of closed trades."
+        },
+        "numberOfWinningTrades": {
+          "type": "INTEGER",
+          "mode": "NULLABLE",
+          "description": "Count of winning trades."
+        },
+        "numberOfLosingTrades": {
+          "type": "INTEGER",
+          "mode": "NULLABLE",
+          "description": "Count of losing trades."
+        },
+        "totalProfitLoss": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Total dollar profit/loss."
+        },
+        "totalProfit": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Gross sum of winning trade dollars."
+        },
+        "totalLoss": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Gross sum of losing trade dollars."
+        },
+        "largestProfit": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Largest single winning trade dollar profit."
+        },
+        "largestLoss": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Largest single losing trade dollar loss."
+        },
+        "averageProfitLoss": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Average dollar profit/loss per trade."
+        },
+        "averageProfit": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Average dollar profit of winning trades."
+        },
+        "averageLoss": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Average dollar loss of losing trades."
+        },
+        "averageTradeDuration": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Average holding duration string."
+        },
+        "profitFactor": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Profit Factor (Gross Profit / Gross Loss)."
+        },
+        "sharpeRatio": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Trade-level Sharpe Ratio."
+        },
+        "sortinoRatio": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Trade-level Sortino Ratio."
+        },
+        "totalFees": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Total brokerage commission fees paid USD."
+        }
+      }
+    },
+    "BTOPTotalPerformanceClosedTrades": {
+      "type": "TABLE",
+      "description": "QuantConnect closed trade execution records.",
+      "foreign_keys": [
+        {
+          "column": "backtestId",
+          "references": {
+            "table": "BTOPResults",
+            "column": "backtestId"
+          },
+          "relationship": "MANY_TO_ONE"
+        }
+      ],
+      "fields": {
+        "tradeId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Trade identifier."
+        },
+        "backtestId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Foreign Key referencing BTOPResults.backtestId."
+        },
+        "symbol": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Asset ticker symbol."
+        },
+        "entryTime": {
+          "type": "TIMESTAMP",
+          "mode": "NULLABLE",
+          "description": "Position entry timestamp."
+        },
+        "entryPrice": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Position entry price."
+        },
+        "direction": {
+          "type": "INTEGER",
+          "mode": "NULLABLE",
+          "description": "Trade direction (Long=0, Short=1)."
+        },
+        "quantity": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Trade quantity."
+        },
+        "exitTime": {
+          "type": "TIMESTAMP",
+          "mode": "NULLABLE",
+          "description": "Position exit timestamp."
+        },
+        "exitPrice": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Position exit price."
+        },
+        "profitLoss": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Net dollar profit/loss."
+        },
+        "totalFees": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Brokerage commission fee USD."
+        },
+        "mae": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Maximum Adverse Excursion USD."
+        },
+        "mfe": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Maximum Favorable Excursion USD."
+        },
+        "duration": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Trade holding duration string."
+        },
+        "endTradeDrawdown": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Drawdown at trade end."
+        },
+        "isWin": {
+          "type": "BOOLEAN",
+          "mode": "NULLABLE",
+          "description": "True if trade was profitable."
+        }
+      }
+    },
+    "BTOPRollingWindowPortfolioStats": {
+      "type": "TABLE",
+      "description": "Rolling 12-month window portfolio performance statistics.",
+      "foreign_keys": [
+        {
+          "column": "backtestId",
+          "references": {
+            "table": "BTOPResults",
+            "column": "backtestId"
+          },
+          "relationship": "MANY_TO_ONE"
+        }
+      ],
+      "fields": {
+        "portfolioStatId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Primary Key identifier."
+        },
+        "backtestId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Foreign Key referencing BTOPResults.backtestId."
+        },
+        "rollingWindowId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Rolling window key label (e.g. 12M)."
+        },
+        "compoundingAnnualReturn": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Rolling CAGR decimal."
+        },
+        "drawdown": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Rolling max drawdown decimal."
+        },
+        "sharpeRatio": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Rolling Sharpe Ratio."
+        },
+        "sortinoRatio": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Rolling Sortino Ratio."
+        }
+      }
+    },
+    "BTOPRollingWindowTradeStats": {
+      "type": "TABLE",
+      "description": "Rolling window trade performance statistics.",
+      "foreign_keys": [
+        {
+          "column": "backtestId",
+          "references": {
+            "table": "BTOPResults",
+            "column": "backtestId"
+          },
+          "relationship": "MANY_TO_ONE"
+        }
+      ],
+      "fields": {
+        "tradeStatId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Primary Key identifier."
+        },
+        "backtestId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Foreign Key referencing BTOPResults.backtestId."
+        },
+        "rollingWindowId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Rolling window key label."
+        },
+        "totalNumberOfTrades": {
+          "type": "INTEGER",
+          "mode": "NULLABLE",
+          "description": "Count of trades in rolling window."
+        },
+        "winRate": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Rolling win rate decimal."
+        },
+        "profitFactor": {
+          "type": "FLOAT",
+          "mode": "NULLABLE",
+          "description": "Rolling profit factor."
+        }
+      }
+    },
+    "BTOPParameterSet": {
+      "type": "TABLE",
+      "description": "Algorithm parameter key-value dictionary per backtest run.",
+      "foreign_keys": [
+        {
+          "column": "backtestId",
+          "references": {
+            "table": "BTOPResults",
+            "column": "backtestId"
+          },
+          "relationship": "ONE_TO_ONE"
+        }
+      ],
+      "fields": {
+        "parameterId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Primary Key identifier <backtestId>_param."
+        },
+        "backtestId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Foreign Key referencing BTOPResults.backtestId."
+        },
+        "parameters": {
+          "type": "RECORD",
+          "mode": "REPEATED",
+          "description": "Repeated record containing name (string) and value (string)."
+        }
+      }
+    },
+    "BTOPResearchGuide": {
+      "type": "TABLE",
+      "description": "QuantConnect Research Guide statistical metadata.",
+      "foreign_keys": [
+        {
+          "column": "backtestId",
+          "references": {
+            "table": "BTOPResults",
+            "column": "backtestId"
+          },
+          "relationship": "ONE_TO_ONE"
+        }
+      ],
+      "fields": {
+        "guideId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Primary Key identifier <backtestId>_guide."
+        },
+        "backtestId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Foreign Key referencing BTOPResults.backtestId."
+        },
+        "minutes": {
+          "type": "INTEGER",
+          "mode": "NULLABLE",
+          "description": "Minutes of research compute consumed."
+        },
+        "backtestCount": {
+          "type": "INTEGER",
+          "mode": "NULLABLE",
+          "description": "Number of backtests run in project session."
+        }
+      }
+    },
+    "BTOPRuntimeStatistics": {
+      "type": "TABLE",
+      "description": "Runtime summary statistics displayed on QuantConnect backtest header.",
+      "foreign_keys": [
+        {
+          "column": "backtestId",
+          "references": {
+            "table": "BTOPResults",
+            "column": "backtestId"
+          },
+          "relationship": "ONE_TO_ONE"
+        }
+      ],
+      "fields": {
+        "runtimeStatId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Primary Key identifier <backtestId>_runtime."
+        },
+        "backtestId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Foreign Key referencing BTOPResults.backtestId."
+        },
+        "equity": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Ending equity formatted string."
+        },
+        "fees": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Total fees formatted string."
+        },
+        "netProfit": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Net profit formatted string."
+        },
+        "return": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Total return formatted string."
+        }
+      }
+    },
+    "BTOPCharts": {
+      "type": "TABLE",
+      "description": "Time-series chart data series generated during backtest run.",
+      "foreign_keys": [
+        {
+          "column": "backtestId",
+          "references": {
+            "table": "BTOPResults",
+            "column": "backtestId"
+          },
+          "relationship": "MANY_TO_ONE"
+        }
+      ],
+      "fields": {
+        "chartId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Primary Key identifier."
+        },
+        "backtestId": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Foreign Key referencing BTOPResults.backtestId."
+        },
+        "name": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Chart title string (e.g. Strategy Equity)."
+        },
+        "seriesName": {
+          "type": "STRING",
+          "mode": "NULLABLE",
+          "description": "Series name string (e.g. Equity)."
+        }
+      }
+    }
+  },
+  "analytical_views": {
+    "v_4EVC_trade_execution_sequence": {
+      "type": "VIEW",
+      "description": "Sequences 4EVC trade execution order (1..N) per backtest, computing trade lifecycle KPIs, signal indicators, running cumulative PnL, and drawdowns.",
+      "base_tables": [
+        "BTOPTrades",
+        "BTOPResults"
+      ]
+    },
+    "v_4EVC_trade_flow": {
+      "type": "VIEW",
+      "description": "Comprehensive trade lifecycle view combining trade sequence metrics with raw order fill details for Sankey diagrams and trade flow analysis.",
+      "base_tables": [
+        "v_4EVC_trade_execution_sequence",
+        "BTOPTrades",
+        "BTOPOrders"
+      ]
+    },
+    "v_4EVC_decile_signals": {
+      "type": "VIEW",
+      "description": "Calculates decile factor buckets for Volatility Ratio, Slope, and IV/RV Ratio to evaluate factor monotonicity and PnL performance.",
+      "base_tables": [
+        "v_4EVC_trade_execution_sequence"
+      ]
+    },
+    "v_4EVC_backtest_execution_comparison": {
+      "type": "VIEW",
+      "description": "Summary execution KPIs comparing 1:N backtests for 4EVC strategy in Looker scorecards and comparison matrices.",
+      "base_tables": [
+        "BTOPResults",
+        "BTOPTotalPerformancePortfolioStats",
+        "BTOPTotalPerformanceTradeStats",
+        "v_4EVC_trade_execution_sequence"
+      ]
+    },
+    "v_4EVC_batch_concatenated_trades": {
+      "type": "VIEW",
+      "description": "Concatenates multi-period chunked backtests (2022, 2023, 2024) by batch_id into a single continuous time series, computing multi-year equity curves, cumulative PnL, drawdowns, and trade stats.",
+      "base_tables": [
+        "BTOPTrades"
+      ]
+    }
+  }
+}

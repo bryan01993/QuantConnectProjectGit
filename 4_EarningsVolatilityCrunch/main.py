@@ -1,877 +1,407 @@
-# region imports
 import math
+import json
+import uuid
+from datetime import timedelta, datetime, date, time
+from collections import defaultdict
+from typing import List, Dict, Tuple, Optional, Set, Any
+import numpy as np
+
+import os
+import sys
+
+_WORKSPACE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_LIBRARY_DIR = os.path.join(_WORKSPACE_DIR, "Library")
+for path_dir in [_WORKSPACE_DIR, _LIBRARY_DIR]:
+    if path_dir not in sys.path:
+        sys.path.insert(0, path_dir)
 
 from AlgorithmImports import *
-from QuantConnect import Symbol
-from QuantConnect.Data.Fundamental import FineFundamental
-from QuantConnect.DataSource import EODHDUpcomingEarnings
-from QuantConnect.Securities import *
-from collections import defaultdict
-from math import log, sqrt, exp
-from scipy.stats import norm
-from QuantConnect.Securities.Option import QLOptionPriceModel, NullOptionAssignmentModel
-from QuantConnect.Orders import UpdateOrderFields
-from datetime import timedelta, datetime, date
-import pandas as pd
-from PropietaryCode.decorators import monitor_execution
-from math import sqrt
-import json
-
-# Global storage dictionary
-OBJECT_LOG = {}
+from PropietaryCode import monitor_execution
 # endregion
 
-import io
-import csv
-from datetime import datetime
+# Pure math standard normal distribution helpers (100x faster than scipy.stats.norm)
+def _norm_cdf(x: float) -> float:
+    """Standard normal cumulative distribution function using math.erf."""
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
-
-def describe_object(obj, obj_name="unknown"):
-    description = {
-        "name": obj_name,
-        "type": str(type(obj)),
-        "attributes": {},
-        "methods": []
-    }
-
-    for attr in dir(obj):
-        if attr.startswith("__"):
-            continue
-        try:
-            value = getattr(obj, attr)
-            if callable(value):
-                description["methods"].append(attr)
-            else:
-                description["attributes"][attr] = value
-        except Exception as e:
-            description["attributes"][attr] = f"<Error reading: {e}>"
-
-    # Append to global OBJECT_LOG
-    OBJECT_LOG[obj_name] = description
+def _norm_pdf(x: float) -> float:
+    """Standard normal probability density function."""
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
 
 
 class EarningsVolatilityCrunch(QCAlgorithm):
+    # State tracking variables
+    earnings_calendar: Dict[Symbol, datetime] = {}
+    pending_option_orders: List[Tuple[Symbol, int, str]] = []  # Queue of (contract, qty, tag)
+    active_spreads: Dict[Symbol, Dict[str, Any]] = {}          # {underlying: {front, back, qty, entry_price, report_date}}
+    trade_history: Dict[Symbol, List[Dict[str, Any]]] = defaultdict(list) # {underlying: [{"pnl", ...}]}
+    
+    # High-Performance Caches (Eliminates repeated OptionChainProvider & History calls)
+    _metrics_cache: Dict[Tuple[Symbol, date], Tuple[float, float]] = {}      # {(symbol, date): (vol_ratio, rv)}
+    _option_chain_cache: Dict[Tuple[Symbol, date], List[Symbol]] = {}        # {(symbol, date): option_contracts}
+    _subscribed_options: Set[Symbol] = set()                                 # Set of currently subscribed option contracts
+    
+    # Thresholds and params
+    initial_amount: float = 0.0
+    max_symbols: int = 4000
+    alpha_spread: float = 0.20
+    days_before_earnings: int = 0
+    days_after_earnings: int = 0
+    slope_threshold: float = 0.0
+    max_spread_threshold: float = 2.00
+    max_loss_pct: float = 0.0
+    kelly_factor: float = 0.0
+    kelly_period: int = 0
+    option_upper_filter: int = 0
+    option_lower_filter: int = 0
+    option_max_exp_days: int = 0
+    option_min_exp_days: int = 0
+    
+    # Pass-all toggle for profit-to-factor trade analysis
+    pass_all: bool = False
+    volume_threshold: float = 1.0
+    ivrv_threshold: float = 1.0
+    
+    # State flags
+    _final_liquidated: bool = False
+    _algo_end_date: Optional[date] = None
 
-    @monitor_execution
-    def Initialize(self):
-        # --- Run OnData on a daily cadence ---
-        # Use daily resolution across the board so OnData fires once per trading day
-        self.UniverseSettings.Resolution = Resolution.DAILY
-        self.UniverseSettings.FillForward = True
+    def Initialize(self) -> None:
+        """Initial settings, universes, parameter loading, and schedule events."""
+        # Reset all class-level dictionary caches to prevent memory leaks across runs
+        EarningsVolatilityCrunch._metrics_cache.clear()
+        EarningsVolatilityCrunch._option_chain_cache.clear()
+        EarningsVolatilityCrunch._subscribed_options.clear()
+        self.earnings_calendar.clear()
+        self.active_spreads.clear()
+        self.pending_option_orders.clear()
 
-        # Brokerage & fee model (Interactive Brokers)
-        self.SetBrokerageModel(BrokerageName.INTERACTIVE_BROKERS_BROKERAGE)
+        # Unique identifier for this backtest execution run and trade counter
+        self.backtest_run_id = f"EVC_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}"
+        self.trade_id_counter = 0
+        self._pending_entry_tickets = {}
+        self._pending_exit_tickets = {}
+        self._traded_today = set()
 
-        # Dates, cash, warmup
-        self.SetStartDate(*map(int, self.GetParameter("exec.start_date").split('-')))
-        self.SetEndDate(*map(int, self.GetParameter("exec.end_date").split('-')))
-        self.SetCash(self.GetParameter("exec.initial_amount"))
-        self.SetWarmUp(5, Resolution.Daily)
+        # 1. Setup Resolution and parameters (Strict Hourly Resolution)
+        self.universe_settings.resolution = Resolution.HOUR
+        self.universe_settings.fill_forward = True
+        self.universe_settings.data_normalization_mode = DataNormalizationMode.RAW
+        self.universe_settings.dispose_on_universe_removal = True
 
-        # Universes
+        # 2. Brokerage setup
+        self.set_brokerage_model(BrokerageName.INTERACTIVE_BROKERS_BROKERAGE, AccountType.MARGIN)
+
+        # 3. Load configuration parameters
+        self.initial_amount = float(self.GetParameter("exec.initial_amount", "100000000.0"))
+        self.max_symbols = int(self.GetParameter("univ.coarse.max_symbols", "4000"))
+        self.alpha_spread = float(self.GetParameter("exec.alpha_spread", "0.20"))
+        self.risk_free_rate = float(self.GetParameter("exec.risk_free_rate", "0.045")) # Current 4.5% benchmark interest rate
+        self.SetStartDate(*map(int, self.GetParameter("exec.start_date", "2020-01-01").split('-')))
+        self.SetEndDate(*map(int, self.GetParameter("exec.end_date", "2025-12-31").split('-')))
+        self.SetCash(self.initial_amount)
+        self.SetWarmUp(10, Resolution.Daily)
+
+        self.min_days_before_earnings = int(self.GetParameter("algo.min_days_before_earnings", "1"))
+        self.days_before_earnings = int(self.GetParameter("algo.days_before_earnings", "3"))
+        self.days_after_earnings = int(self.GetParameter("algo.days_after_earnings", "0"))
+        self.entry_hour = int(self.GetParameter("algo.entry_hour", "15"))
+        self.exit_hour = int(self.GetParameter("algo.exit_hour", "10"))
+        self.slope_threshold = float(self.GetParameter("algo.slope_threshold", "0.0"))
+        self.max_spread_threshold = float(self.GetParameter("algo.max_spread_threshold", "0.25"))
+
+        # Data collection mode enforcement (pass_all = True for data collection across 3000 symbols)
+        pass_all_param = str(self.GetParameter("algo.pass_all", "true")).lower() == "true"
+        is_hdbt = str(self.GetParameter("algo.is_hdbt", "false")).lower() == "true"
+        if pass_all_param or is_hdbt:
+            self.pass_all = True
+            self.max_symbols = max(3000, self.max_symbols)
+            self.Log(f"[Data Collection Initialize] Running un-filtered mode: pass_all=True, max_symbols={self.max_symbols}")
+        else:
+            self.pass_all = False
+            self.Log(f"[Initialize] Filtered run mode: pass_all=False, max_symbols={self.max_symbols}")
+
+        self.volume_threshold = float(self.GetParameter("algo.volume_threshold", "1.0"))
+        self.ivrv_threshold = float(self.GetParameter("algo.ivrv_threshold", "1.0"))
+        
+        self.max_loss_pct = float(self.GetParameter("risk.max_loss_pct", "70.0"))
+        self.kelly_factor = float(self.GetParameter("risk.kelly.factor", "0.35"))
+        self.kelly_period = int(self.GetParameter("risk.kelly.period", "30"))
+        
+        self.option_upper_filter = int(self.GetParameter("algo.option.upper_filter", "2"))
+        self.option_lower_filter = int(self.GetParameter("algo.option.lower_filter", "-2"))
+        self.option_max_exp_days = int(self.GetParameter("algo.option.max_exp_days", "150"))
+        self.option_min_exp_days = int(self.GetParameter("algo.option.min_exp_days", "5"))
+        self.min_days_between_contracts = int(self.GetParameter("algo.min_days_between", "60"))
+
+        # Fix 3, 4 Parameters: Minimum IV Ratio and ITM Safety Guard
+        self.min_iv_ratio = float(self.GetParameter("algo.min_iv_ratio", "1.15"))
+        self.itm_safety_pct = float(self.GetParameter("risk.itm_safety_pct", "1.5"))
+
+        # 4. Universes Setup (Coarse + EODHD Upcoming Earnings)
         self.AddUniverse(self.CoarseSelectionFunction)
         self.AddUniverse(EODHDUpcomingEarnings, self.UpcomingEarningsSelectionFunction)
 
-        # Ensure all equities added (by you or by option legs) are RAW
-        self.UniverseSettings.DataNormalizationMode = DataNormalizationMode.Raw
+        # 5. Scheduled final liquidation anchor
+        self.RegisterFinalLiquidation(anchor_ticker="SPY", minutes_before_close=120)
 
-        # State
-        self.earnings_calendar = {}  # Cache for earnings dates
-        self.symbols_total = 0
-        self.symbols_optionable = 0
-        self.slope_results = {}
-        self.volume_results = {}
-        self.ivrv_results = {}
-        self.added_equities = set()
-        self.latest_iv_data = {}
-        self.pending_option_orders = []  # list[tuple[Symbol, int, str]]
-        self._last_earnings_scan = None
-        self._processed_earnings = {}  # {Symbol: last_processed_time}
-        self.symbol_states = {}  # by underlying/strategy key
-        self.bar_size = Resolution.Hour  # whatever you use
-        self.trade_all = True  # bool for Debugging trades of all sorts vs only filtered trades
-        self.register_final_liquidation(self, anchor_ticker="SPY", minutes_before_close=120)
-        # Stores the most recent snapshot of calendar candidates (by underlying)
-        self.calendar_candidates = {}
-        # Same-bar de-dup guard (calendar_id set)
-        self._calendars_seen_this_bar = set()
-        self.near_candidates = {}
-        self.far_candidates = {}
-        self._candidates_built_at = None
-
-    @monitor_execution
-    def OnEndOfDay(self):
-        tpv = self.Portfolio.TotalPortfolioValue or 0
-        if tpv == 0:
-            return
-
-        holdings = [
-            (symbol, holding.HoldingsValue / tpv)
-            for symbol, holding in self.Portfolio.items()
-            if holding.Invested
-        ]
-        if not holdings:
-            return
-
-        for sym, pct in sorted(holdings, key=lambda x: x[1], reverse=True)[:5]:
-            sec_type = sym.ID.SecurityType
-            self.Debug(f"{sym.Value} | {sec_type} | {pct:.2%}")
-
-    # @monitor_execution
     def CoarseSelectionFunction(self, coarse: List[CoarseFundamental]) -> List[Symbol]:
-        lower_price = int(self.GetParameter("univ.coarse.min_price"))  # Define lower price bound
-        upper_price = int(self.GetParameter("univ.coarse.max_price"))  # Define upper price bound
-        min_volume = int(self.GetParameter("univ.coarse.dollar_volume"))
+        """Filters initial universe by price (min_price and above) and daily volume (> 1.5M shares per day)."""
+        min_price = float(self.GetParameter("univ.coarse.min_price", "15"))
+        min_share_volume = float(self.GetParameter("univ.coarse.min_share_volume", "1500000"))
 
-        return [x.Symbol for x in coarse if x.HasFundamentalData
-                and lower_price <= x.Price <= upper_price
-                and x.Volume is not None
-                and x.Volume >= min_volume][
-               :int(self.GetParameter("univ.coarse.max_symbols"))]
+        filtered = [
+            x for x in coarse 
+            if x.HasFundamentalData
+            and x.Price >= min_price
+            and x.Volume is not None
+            and x.Volume >= min_share_volume
+        ]
+        sorted_filtered = sorted(filtered, key=lambda x: x.DollarVolume, reverse=True)
+        selected_symbols = [x.Symbol for x in sorted_filtered[:self.max_symbols]]
+        self._active_coarse_tickers = {x.Value for x in selected_symbols}
+        return selected_symbols
 
-    # @monitor_execution
     def UpcomingEarningsSelectionFunction(self, earnings: List[EODHDUpcomingEarnings]) -> List[Symbol]:
+        """Identifies stocks with upcoming earnings strictly between min_days_before_earnings and days_before_earnings."""
         selected = []
-        max_items = 100
+        min_cutoff = (self.Time + timedelta(days=self.min_days_before_earnings)).date()
+        target_cutoff = (self.Time + timedelta(days=self.days_before_earnings)).date()
+        active_tickers = getattr(self, "_active_coarse_tickers", set())
 
         for e in earnings:
-            if e.ReportDate <= self.Time + timedelta(days=int(self.GetParameter("algo.days_before_earnings"))):
-                if self.OptionChainProvider.GetOptionContractList(e.Symbol, self.Time):
+            if e.ReportDate is not None:
+                # Ensure the ticker string is present in valid liquid coarse universe to prevent missing factor file memory crashes
+                if active_tickers and e.Symbol.Value not in active_tickers:
+                    continue
+                report_d = e.ReportDate.date()
+                if min_cutoff <= report_d <= target_cutoff:
                     selected.append(e.Symbol)
                     self.earnings_calendar[e.Symbol] = e.ReportDate
-                    eq = self.AddEquity(e.Symbol, Resolution.DAILY)
-                    eq.SetDataNormalizationMode(DataNormalizationMode.Raw)
 
-                    # stop once we have 20
-                    if len(selected) >= max_items:
+                    if len(selected) >= self.max_symbols:
                         break
-
-        total = len(earnings)
-        optionable = len(selected)
-        # self.Log(f"[{self.Time}] Earnings Announcements: {total}, Optionable: {optionable}")
         return selected
 
-    # @monitor_execution
-    def OnData(self, data: Slice):
-        if self.IsWarmingUp:  # Ensure Algo has warmed
+    def OnSecuritiesChanged(self, changes: SecurityChanges) -> None:
+        """Sets raw price data normalization for all added equities."""
+        for security in changes.AddedSecurities:
+            if security.Type == SecurityType.Equity:
+                security.SetDataNormalizationMode(DataNormalizationMode.Raw)
+
+    def OnData(self, data: Slice) -> None:
+        """Core slice event handler performing position management and calendar spread entry scanning."""
+        if self.IsWarmingUp:
             return
 
-        self.manage_open_positions()
+        # 0. Equity Assignment Emergency Liquidator: Immediately flatten short stock & cut paired long option leg via Market orders
+        for holding in list(self.Portfolio.Values):
+            if holding.Invested and holding.Symbol.SecurityType == SecurityType.Equity:
+                open_orders = self.Transactions.GetOpenOrders(holding.Symbol)
+                if not open_orders:
+                    self.Log(f"[ASSIGNMENT EMERGENCY] Short option assigned! Flattening equity stock holding {holding.Symbol.Value} Qty: {holding.Quantity}")
+                    self.MarketOrder(holding.Symbol, -holding.Quantity, tag="FLATTEN: Assignment Stock Emergency")
+                    
+                    # Immediately cut remaining paired long option leg for this underlying as fast as possible
+                    underlying = holding.Symbol
+                    if underlying in self.active_spreads:
+                        pos = self.active_spreads[underlying]
+                        back = pos.get("back")
+                        if back and self.Portfolio.ContainsKey(back) and self.Portfolio[back].Invested:
+                            back_qty = self.Portfolio[back].Quantity
+                            self.Log(f"[ASSIGNMENT EMERGENCY] Immediately cutting paired long option leg {back.Value} Qty: {back_qty}")
+                            self.MarketOrder(back, -back_qty, tag="FLATTEN: Emergency Long Leg Cut Post-Assignment")
+                        self.UnsubscribeOption(pos.get("front"))
+                        self.UnsubscribeOption(back)
+                        self.active_spreads.pop(underlying, None)
+                    else:
+                        # Scan portfolio for any remaining option contracts on this underlying
+                        for sec in list(self.Portfolio.Values):
+                            if sec.Invested and sec.Symbol.SecurityType in [SecurityType.Option, SecurityType.IndexOption]:
+                                sec_und = sec.Symbol.Underlying if hasattr(sec.Symbol, "Underlying") and sec.Symbol.Underlying else None
+                                if sec.Symbol.Underlying == underlying or (sec_und and sec_und.Value == underlying.Value):
+                                    self.Log(f"[ASSIGNMENT EMERGENCY] Cutting unhedged long option contract {sec.Symbol.Value} Qty: {sec.Quantity}")
+                                    self.MarketOrder(sec.Symbol, -sec.Quantity, tag="FLATTEN: Emergency Option Cut Post-Assignment")
 
-        if self.pending_option_orders:  # drain pending orders that now have prices
-            still_pending = []
-            for contract, qty, tag in self.pending_option_orders:
-                if data.ContainsKey(contract) and self.Securities[contract].HasData and self.Securities[
-                    contract].Price > 0:
-                    self.MarketOnOpenOrder(contract, qty, tag=f"non-fullfiled {tag}")
-                else:
-                    still_pending.append((contract, qty, tag))
-            self.pending_option_orders = still_pending
+        # 0b. Orphaned Option Leg Sweeper: Flatten any single unhedged long or short option leg not active in active_spreads
+        self.SweepOrphanedOptionLegs()
 
-        self.purge_old_earnings_data(purge_days=5)  # Purge old passed earnings data
+        # 1. Manage open positions (Time exit, DTE Safety)
+        self.ManageOpenPositions(data)
 
-        self.contract_results = {}  # new dictionary to collect results
+        # 2. Process pending queued option orders
+        self.ProcessPendingOrders(data)
 
-        # before the symbol loop (once per OnData)
-        if not hasattr(self, "contract_results"):
-            self.contract_results = {}  # {(front, back): {"slope":..., "volume_ok":..., "ivrv":..., "ts": datetime}}
+        # 3. Clean up expired earnings cache
+        self.PurgeExpiredEarnings()
 
-        for symbol, earnings_date in self.earnings_calendar.items():  # Main Loop
-            # self.Debug(f"Looping through {symbol.Value} with earnings {earnings_date}")
-            if self.Portfolio[symbol].Invested:
-                # self.Debug(f"symbol {symbol} already invested, skipping. Should Monitor Pos")
-                ## TODO handle already invested positions
+        # 4. Scan upcoming earnings calendar candidates for spread entries
+        # Video Timing Rule: Enter during afternoon pre-close hours (2:00 PM to 4:00 PM EST / hours 14 or 15)
+        if self.Time.hour < 14 or self.Time.hour > 15:
+            return
+
+        for underlying, report_date in list(self.earnings_calendar.items()):
+            # Guard 1: Skip if already invested
+            if self.IsAlreadyInvested(underlying):
                 continue
 
-            # Extra safeguard: skip if any option positions exist for this underlying
-            already_invested_options = any(
-                sec.Invested and sec.Symbol.HasUnderlying and sec.Symbol.Underlying == symbol
-                for sec in self.Portfolio.Values
-            )
-            if already_invested_options:
-                # self.Debug(f"Options on {symbol} already invested, skipping new trade.")
-                ## Skip analysis since you already got a trade
-                continue
+            # Guard 2: BMO vs AMC Timing Differentiation
+            # AMC (After Market Close): Earnings released post-close on report_date. Entry window is afternoon of report_date itself (days_to_earnings == 0).
+            # BMO (Before Market Open) / Default: Earnings released pre-open on report_date. Entry window is afternoon of day prior (days_to_earnings == 1).
+            is_amc = report_date.hour >= 12 or getattr(report_date, "ReportTime", "") == "AMC"
+            days_to_earnings = (report_date.date() - self.Time.date()).days
 
-            strike_chains = self.get_calls_up_to_two_strikes(symbol, earnings_date)
-            contract_tuples = self.match_option_contracts_by_strike_and_type_2(contracts=strike_chains)
-
-            for front_contract, back_contract in contract_tuples:
-                key = (front_contract, back_contract)
-                cached = self.contract_results.get(key)
-                use_cache = cached and (self.Time - cached["ts"] < timedelta(hours=24))
-
-                if use_cache:
-                    results = cached
-
-                else:
-                    slopes = self.calculate_iv_slope_pair(front_contract, back_contract, earnings_date, self.Time)
-                    vol_ratio = self.filter_pre_earnings_volume(symbol, earnings_date)
-                    ivrv_ratio = self.iv_over_rv_ratio(symbol, earnings_date,
-                                                       iv_annualized=slopes['near_iv']) if slopes else None
-
-                    self.contract_results[(front_contract, back_contract)] = {
-                        "slope": slopes['slope'] if slopes else None,
-                        "front_iv": slopes['near_iv'] if slopes else None,
-                        "back_iv": slopes['far_iv'] if slopes else None,
-                        "vol_ratio": vol_ratio,
-                        "strike": slopes['strike'] if slopes else None,
-                        "ivrv": ivrv_ratio,
-                        "ts": self.Time
-                    }
-
-            # ### Debugging results DELETE After dev
-            # the_results = self.contract_results
-            # if the_results:
-            #     for (front, back), metrics in the_results.items():
-            #         self.Log(f"{front.Value} | {back.Value} -> slope={metrics['slope']}, "
-            #                 f"vol_ratio={metrics['vol_ratio']}, ivrv={metrics['ivrv']}, fiv={metrics['front_iv']}, biv={metrics['back_iv']}")
-            #         self.Log('Jump to next OnData')
-            # else:
-            #     self.Debug("No option pairs stored in results.")
-
-        # --- Filter to keep only the best pair per symbol ---
-        if self.contract_results:
-            best_results = {}
-            from collections import defaultdict
-            grouped_by_symbol = defaultdict(list)
-
-            for (front, back), metrics in self.contract_results.items():
-                grouped_by_symbol[front.Underlying].append(((front, back), metrics))
-
-            for symbol, pairs in grouped_by_symbol.items():
-                # Sort criteria: slope DESC, ivrv DESC, vol_ratio DESC
-                # Handle Nones by treating them as -infinity
-                def sort_key(item):
-                    _, m = item
-                    s = m.get('slope')
-                    i = m.get('ivrv')
-                    v = m.get('vol_ratio')
-                    return (
-                        s if s is not None else -float('inf'),
-                        i if i is not None else -float('inf'),
-                        v if v is not None else -float('inf')
-                    )
-
-                # Sort descending to get highest values first
-                pairs.sort(key=sort_key, reverse=True)
-
-                # Take the best one
-                best_pair, best_metrics = pairs[0]
-                best_results[best_pair] = best_metrics
-
-            self.contract_results = best_results
-
-        # --- modify OnData(), inside/near your `if self.trade_all:` branch ---
-        if self.trade_all and self.contract_results:
-            # self.Debug(f"initial conditions passed: {len(self.contract_results)} pairs")
-            if getattr(self, "_candidates_built_at", None) != self.Time:
-                self._candidates_built_at = self.Time
-
-            # 1) reset same-bar seen set
-            if getattr(self, "_last_bar_time", None) != self.Time:
-                self._calendars_seen_this_bar = set()
-                self._last_bar_time = self.Time
-
-            from collections import defaultdict
-            candidates_by_underlying = defaultdict(list)
-
-            # 2) iterate over your universe / chains as you already do
-            for (front_contract, back_contract), metrics in self.contract_results.items():
-                symbol = front_contract.Underlying
-
-                # (A) obtain your precomputed analytics for this underlying
-                slope = metrics['slope']
-                ivrv_ratio = metrics['ivrv']
-                vol_ratio = metrics['vol_ratio']
-
-                if slope is None or ivrv_ratio is None or vol_ratio is None:
+            if is_amc:
+                if days_to_earnings != 0:
                     continue
-
-                # (B) Construct candidate rows (NO orders here)
-                # We already have the matched pair (front_contract, back_contract) from the loop key
-                
-                calendar_id, row = self._row_from_pair(symbol, front_contract, back_contract, slope, ivrv_ratio, vol_ratio)
-
-                # de-dup within this bar
-                if calendar_id in self._calendars_seen_this_bar:
-                    continue
-
-                self._calendars_seen_this_bar.add(calendar_id)
-                candidates_by_underlying[str(symbol)].append(row)
-
-            # 3) publish snapshot for later ranking/placement stage
-            self.calendar_candidates = dict(candidates_by_underlying)
-            # Optional tiny debug:
-            self.Debug(f"[{self.Time}] candidates: {sum(len(v) for v in self.calendar_candidates.values())}")
-            pass
-        if self.trade_all:
-            for (front_contract, back_contract), m in self.contract_results.items():
-                slope_ok = m["slope"]
-                volume_ok = m["vol_ratio"]
-                ivrv_ok = m["ivrv"]
-                if slope_ok and volume_ok and ivrv_ok:
-                    # ensure strike in metrics for tagging
-                    m["strike"] = float(front_contract.ID.StrikePrice)
-                    self.place_tagged_calendar(symbol=front_contract.Underlying,
-                                               front_contract=front_contract,
-                                               back_contract=back_contract,
-                                               qty=1,
-                                               metrics=m,
-                                               long_calendar=True)
-
-        #     ### TO IMPLEMENT LATER ###
-        #     option_symbol = self.AddOption(symbol, Resolution.HOUR)
-        #     strat = OptionStrategies.call_calendar_spread(option_symbol,
-        #                                                     symbol_slopes['strike'],
-        #                                                     symbol_slopes['near_contract_expiry'],
-        #                                                     symbol_slopes['far_contract_expiry'])
-        #     self.buy(strat, 1)  # self.sell(...) for short calendar
-
-    def OnEndOfAlgorithm(self):
-        # Safety log so you can spot anything that failed to close
-        still = [p.Symbol.Value for p in self.Portfolio.Values if p.Invested]
-        if still:
-            self.Debug(f"[FINAL][WARN] Still invested in: {still}")
-        else:
-            self.Debug("[FINAL] All positions closed before backtest end.")
-
-    ### Functions Start ###
-
-    @monitor_execution
-    def manage_open_positions(self):
-        """
-        Manages open option positions:
-        - Closes Short ITM/ATM options if <= 1 DTE.
-        - Closes Long ITM options if <= 1 DTE (to prevent exercise).
-        - Allows OTM options to expire.
-        """
-        options_to_liquidate = []
-
-        for kvp in self.Portfolio:
-            symbol = kvp.Key
-            holding = kvp.Value
-
-            if holding.Invested and symbol.ID.SecurityType == SecurityType.Equity:  # Eliminate Equities from Portfolio
-                self.Liquidate(symbol, tag=f"[{self.Time}] OnData flatten equities")
-
-            # Only care about invested Options
-            if not holding.Invested or symbol.SecurityType != SecurityType.Option:
-                continue
-
-            # Calculate DTE (Days to Expiry)
-            expiry = symbol.ID.Date.date()
-            # If OnData is daily (midnight), self.Time.date() might be 'today'.
-            # DTE = (expiry - now).days.
-            dte = (expiry - self.Time.date()).days
-
-            # We care about things expiring very soon (<= 1 day)
-            if dte <= 1:
-                security = self.Securities[symbol]
-                price = security.Price
-                strike = symbol.ID.StrikePrice
-                right = symbol.ID.OptionRight
-
-                # Helper for Moneyness
-                # ITM for Call: Price > Strike
-                # ITM for Put: Price < Strike
-                # We treat "AT or IN" as inclusive
-                is_atm_or_itm = False
-                if right == OptionRight.Call:
-                    if price >= strike:
-                        is_atm_or_itm = True
-                elif right == OptionRight.Put:
-                    if price <= strike:
-                        is_atm_or_itm = True
-
-                # Logic per side
-                if holding.IsShort:
-                    # Short: "if they are 1 day away from expiry and are AT or IN the money they get closed for their loss."
-                    # OTM (else) are let expire worthless (do nothing).
-                    if is_atm_or_itm:
-                        options_to_liquidate.append((symbol, f"Closing Short ITM/ATM (DTE={dte})"))
-
-                elif holding.IsLong:
-                    # Long: "Longed options are held to maturity BUT never executed"
-                    # Implies: Close if ITM (to prevent exercise). Let expire if OTM.
-                    if is_atm_or_itm:
-                        options_to_liquidate.append((symbol, f"Closing Long ITM (DTE={dte}) to prevent exercise"))
-
-        for symbol, tag in options_to_liquidate:
-            self.Liquidate(symbol, tag=tag)
-
-    def _ensure_option_tradable(self, contract: Symbol, res=Resolution.Hour):
-        if not self.Securities.ContainsKey(contract):
-            o = self.AddOptionContract(contract, res)  # adds underlying too
-            o.SetOptionAssignmentModel(NullOptionAssignmentModel())
-        u = contract.Underlying
-        if self.Securities.ContainsKey(u):
-            self.Securities[u].SetDataNormalizationMode(DataNormalizationMode.Raw)
-
-    def build_order_tag(self, symbol, front_contract, back_contract, metrics, side):
-        """Return a compact, JSON-safe tag string."""
-
-        def sym_str(x):
-            # QuantConnect Symbol → value; everything else → str
-            return getattr(x, "Value", str(x))
-
-        def to_float(x):
-            # Accept None, int/float, numpy numbers, and strings with comma decimals
-            if x is None:
-                return None
-            if isinstance(x, (int, float)):
-                return float(x)
-            try:
-                s = str(x).strip().replace(",", ".")
-                return float(s)
-            except Exception:
-                return None
-
-        # Strike: prefer metrics['strike'] if numeric; else fall back to contract
-        k = to_float(metrics.get("strike"))
-        if k is None:
-            k = to_float(getattr(getattr(front_contract, "ID", None), "StrikePrice", None))
-
-        payload = {
-            "u": sym_str(symbol),
-            "leg": str(side),  # e.g., "LONG" / "SHORT"
-            "k": k,
-            "near": str(getattr(getattr(front_contract, "ID", None), "Date").date()),
-            "far": str(getattr(getattr(back_contract, "ID", None), "Date").date()),
-            "slope": round(to_float(metrics.get("slope")), 5),
-            "ivrv": round(to_float(metrics.get("ivrv")), 5),
-            "vol_ratio": round(to_float(metrics.get("vol_ratio")), 5),  # handles 1,86 → 1.86, dicts → None
-            "ts": (metrics.get("ts") or datetime.utcnow()).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
-
-        # Drop Nones to keep the tag short and avoid junk
-        payload = {k: v for k, v in payload.items() if v is not None}
-
-        s = json.dumps(payload, separators=(",", ":"))  # compact
-
-        # Optional: enforce ~1KB tag guard (QC tags are small)
-        if len(s) > 1024:
-            for key in ("vol_ratio", "ivrv", "slope"):
-                if key in payload:
-                    payload.pop(key)
-                    s = json.dumps(payload, separators=(",", ":"))
-                    if len(s) <= 1024:
-                        break
-            if len(s) > 1024:
-                s = s[:1024]
-
-        return s
-
-    def place_tagged_calendar(self, symbol, front_contract, back_contract, qty, metrics, long_calendar=True):
-        """
-        Submits a calendar spread and tags each leg with JSON including slope/ivrv/vol flags.
-        long_calendar=True -> SHORT near, LONG far
-        """
-        # Ensure contracts tradable
-        self._ensure_option_tradable(front_contract)
-        self._ensure_option_tradable(back_contract)
-
-        # Legs: calendar is same strike/right; typical long calendar: short near, long far
-        sign_near = -1 if long_calendar else +1
-        sign_far = +1 if long_calendar else -1
-
-        legs = [
-            Leg.Create(front_contract, sign_near),
-            Leg.Create(back_contract, sign_far),
-        ]
-
-        base_tag = f"calendar:{symbol.Value}:{front_contract.ID.StrikePrice}@{front_contract.ID.OptionRight}"
-        tickets = self.ComboMarketOrder(legs, 1 if qty is None else int(qty), tag=base_tag)
-
-        # Tag each leg with detailed JSON
-        near_tag = self.build_order_tag(symbol, front_contract, back_contract, metrics,
-                                        side=("SHORT" if long_calendar else "LONG"))
-        far_tag = self.build_order_tag(symbol, front_contract, back_contract, metrics,
-                                       side=("LONG" if long_calendar else "SHORT"))
-
-        if self.IsWarmingUp:
-            return  # or queue tags to apply later
-
-        # tickets come back in the same order as legs; map them directly
-        for ticket, leg in zip(tickets, legs):
-            try:
-                uf = UpdateOrderFields()
-                # if this leg corresponds to the front_contract (near), use near_tag; otherwise far_tag
-                uf.Tag = near_tag if leg.Symbol == front_contract else far_tag
-                ticket.Update(uf)
-            except Exception as e:
-                # small defensive log so we don't silently lose tag updates in live/backtest
-                self.Debug(f"[TagUpdate] Failed to update tag for {getattr(leg, 'Symbol', leg)}: {e}")
-
-    # @monitor_execution
-    def calculate_iv_slope_pair(self,
-                                front_contract: Symbol,
-                                back_contract: Symbol,
-                                earnings_time: datetime,
-                                now: datetime) -> Optional[dict]:
-        """
-        Compute the IV slope between two *specific* option contracts.
-
-        Args:
-            front_contract: earlier-expiring option Symbol
-            back_contract: later-expiring option Symbol
-            earnings_time: earnings datetime to validate against
-            now: current algorithm time (self.Time)
-
-        Returns:
-            dict with keys {"strike", "near_contract", "far_contract", "slope", "diff_days", "near_iv", "far_iv"}
-            or None if invalid / cannot compute.
-        """
-        front_exp = front_contract.ID.Date
-        back_exp = back_contract.ID.Date
-
-        # Must be ordered and both after earnings & now
-        if not (front_exp < back_exp):
-            return None
-        if not (front_exp.date() > max(earnings_time.date(), now.date())):
-            return None
-        if back_exp.date() <= now.date():
-            return None
-
-        diff_days = (back_exp.date() - front_exp.date()).days
-        if diff_days <= 0:
-            return None
-
-        # Compute IVs (uses your existing get_implied_volatilities)
-        near_iv, far_iv = self.get_implied_volatilities(front_contract, back_contract, now=self.Time,
-                                                        earnings_time=earnings_time)
-        if near_iv is None or far_iv is None:
-            return None
-
-        slope = (near_iv - far_iv) / diff_days
-        return {
-            "strike": front_contract.ID.StrikePrice,
-            "near_contract": front_contract,
-            "near_contract_expiry": front_contract.ID.Date,
-            "far_contract_expiry": back_contract.ID.Date,
-            "far_contract": back_contract,
-            "near_iv": round(near_iv, 4),
-            "far_iv": round(far_iv, 4),
-            "slope": round(slope, 4),
-            "diff_days": diff_days
-        }
-
-    # Optional convenience wrapper if you still want to process all pairs for a symbol
-    def calculate_iv_slopes_for_symbol(self, symbol: Symbol, earnings_time: datetime) -> list:
-        front_chain, back_chain = self.get_two_closest_option_chains(symbol, earnings_time)
-        if not front_chain or not back_chain:
-            return []
-        results = []
-        for front, back in self.match_option_contracts_by_strike_and_type(front_chain, back_chain):
-            item = self.calculate_iv_slope_pair(front, back, earnings_time, self.Time)
-            if item is not None:
-                results.append(item)
-        return results
-
-    #
-    # # @monitor_execution
-    def filter_pre_earnings_volume(self, symbol, earnings_date: datetime, threshold: float = 1.20) -> Optional[float]:
-        """
-        Returns the ratio (recent_volume / avg_prev_30) if >= threshold, else None.
-        """
-        history = self.History(symbol, 35, Resolution.Daily)
-        if history is None or getattr(history, "empty", False):
-            return None
-
-        grouped = history.loc[symbol] if isinstance(history.index, pd.MultiIndex) else history
-        grouped = grouped[grouped.index < earnings_date]
-        if grouped is None or len(grouped) < 31:
-            return None
-
-        recent_volume = grouped.iloc[-1].volume
-        avg_volume = grouped.iloc[-31:-1].volume.mean()
-        if not avg_volume:
-            return None
-
-        ratio = float(recent_volume) / float(avg_volume)
-        return ratio
-
-    def iv_over_rv_ratio(self, symbol: Symbol, earnings_date, iv_annualized: float, window: int = 30) -> float:
-        # Get enough daily history, then trim to strictly pre-earnings
-        hist = self.History(symbol, window + 1 + 10, Resolution.Daily)
-        if hist is None or hist.empty:
-            return float('nan')
-        df = hist.loc[symbol] if isinstance(hist.index, pd.MultiIndex) else hist
-        df = df[df.index < earnings_date]
-        if len(df) < window + 1:
-            return float('nan')
-
-        closes = df['close'].iloc[-(window + 1):].astype(float).values
-        logrets = np.log(closes[1:] / closes[:-1])
-        rv = float(logrets.std(ddof=1)) * math.sqrt(252.0)  # annualized
-
-        return float('nan') if rv <= 0 else float(iv_annualized / rv)
-
-    @monitor_execution
-    def purge_old_earnings_data(self, purge_days: int = 15) -> None:
-        cutoff = self.Time - timedelta(days=purge_days)
-        before_count = len(self.earnings_calendar)
-
-        # Filter earnings_calendar and log dropped keys
-        new_calendar = {}
-        for symbol, date in self.earnings_calendar.items():
-            if date >= cutoff:
-                new_calendar[symbol] = date
             else:
-                # self.Debug(f"[Purge] Dropping {symbol} with earnings date {date} older than cutoff {cutoff}")
-                pass
-        self.earnings_calendar = new_calendar
-
-        after_count = len(self.earnings_calendar)
-        if before_count != after_count:
-            pass
-            # self.Debug(f"[Purge] Earnings calendar reduced from {before_count} to {after_count}")
-
-        # Clean slopes dictionary
-        cleaned_slopes = {}
-        if self.slope_results:
-            for symbol, slopes in self.slope_results.items():
-                if symbol not in self.earnings_calendar:
-                    # self.Debug(f"[Purge] Removing slopes for {symbol} as it is no longer in earnings_calendar")
+                if days_to_earnings < self.min_days_before_earnings or days_to_earnings > self.days_before_earnings:
                     continue
-                valid = [s for s in slopes if s['near_contract'].ID.Date > self.Time]
-                if len(valid) != len(slopes):
-                    pass
-                    # self.Debug(f"[Purge] {symbol}: removed {len(slopes) - len(valid)} expired slope entries")
-                if valid:
-                    cleaned_slopes[symbol] = valid
-            self.slope_results = cleaned_slopes
 
-    def _make_calendar_id(self, underlying: str, right: str, strike: float, near_expiry, far_expiry) -> str:
-        """Deterministic ID for de-dup/risk controls."""
-        ne = str(getattr(near_expiry, "date", lambda: near_expiry)())
-        fe = str(getattr(far_expiry, "date", lambda: far_expiry)())
-        return f"{underlying}|{right}|{int(round(strike))}|{ne}→{fe}"
+            # Step A: Pre-calculate Stock-Level Metrics (vol_ratio, RV)
+            metrics = self.GetUnderlyingMetricsCached(underlying, report_date)
+            if metrics is None:
+                continue
 
-    def _row_from_pair(self, underlying, near_contract, far_contract, slope: float, ivrv_ratio: float,
-                       vol_ratio: float):
-        """Shape a single candidate row (no orders here)."""
-        right = str(near_contract.ID.OptionRight)[0]  # 'C' or 'P'
-        strike = float(near_contract.ID.StrikePrice)
-        near_exp = near_contract.ID.Date
-        far_exp = far_contract.ID.Date
+            vol_ratio, rv = metrics
 
-        calendar_id = self._make_calendar_id(underlying, right, strike, near_exp, far_exp)
+            # Tier 1 Gate (Stock Level): Volume Ratio Gate (bypassed if pass_all=True)
+            if not self.pass_all and vol_ratio < self.volume_threshold:
+                continue
 
-        return calendar_id, {
-            "calendar_id": calendar_id,
-            "underlying": str(underlying),
-            "calendar_pair": {
-                "near": {
-                    "expiry": str(near_exp.date()),
-                    "right": right,
-                    "strike": strike,
-                    "symbol_str": str(near_contract)
-                },
-                "far": {
-                    "expiry": str(far_exp.date()),
-                    "right": right,
-                    "strike": strike,
-                    "symbol_str": str(far_contract)
-                }
-            },
-            "metrics": {
-                "slope": float(slope),
-                "ivrv_ratio": float(ivrv_ratio),
-                "vol_ratio": float(vol_ratio)
-            },
-            "ranking": {
-                "liquidity_score": None,
-                "edge_score": None,
-                "composite": None
-            },
-            "ts": self.Time.isoformat()
-        }
+            # Step B: Get active Call option contracts
+            contracts = self.GetCallOptionContractsCached(underlying, report_date)
+            if not contracts:
+                continue
 
-    def _should_final_liquidate(self, today: date, end_date: date) -> bool:
-        # Trigger on the last trading day whose "tomorrow" is >= algorithm EndDate.
-        return (today + timedelta(days=1)) >= end_date
+            # Step C: Pair Call contracts by strike price
+            pairs = self.MatchOptionContracts(contracts)
+            if not pairs:
+                continue
 
-    def register_final_liquidation(self, anchor_ticker: str = "SPY", minutes_before_close: int = 10):
-        """
-        Schedules a one-time 'final liquidation' near the last close.
-        - anchor_ticker is only used to anchor the market calendar (no impact on holdings).
-        - Works across weekends/holidays by firing on the last trading day before EndDate.
-        """
-        # Ensure we have an anchor security for exchange hours
-        anchor = self.Securities[anchor_ticker].Symbol if anchor_ticker in self.Securities \
-            else self.AddEquity(anchor_ticker, Resolution.Minute).Symbol
-        self._final_liquidated = False
-        self._algo_end_date = self.EndDate.date()
+            # Step D: Evaluate candidates with 3-tier short-circuit cascade
+            candidates = []
+            for near_c, far_c in pairs:
+                if not self._ensure_option_tradable(near_c) or not self._ensure_option_tradable(far_c):
+                    continue
 
-        def _maybe_final_liquidation():
-            if self._final_liquidated:
-                return
-            if self._should_final_liquidate(self.Time.date(), self._algo_end_date):
-                self.Debug(f"[FINAL] Cancelling open orders + liquidating at {self.Time}")
-                # 1) cancel ALL open orders first (stops/limits/GTCs)
-                self.Transactions.CancelOpenOrders()
-                # 2) liquidate every invested security (equities, options, etc.)
-                for sec in self.Portfolio.Values:
-                    if sec.Invested:
-                        # For options/futures, Liquidate(symbol) sends the correct offsetting order
-                        self.Liquidate(sec.Symbol)
-                self._final_liquidated = True
+                m = self.CalculateMetrics(underlying, near_c, far_c, report_date, vol_ratio, rv)
+                if m is not None:
+                    candidates.append((m, near_c, far_c))
 
-        # Run daily near close; the predicate limits execution to the last trading day.
-        self.Schedule.On(
-            self.DateRules.EveryDay(anchor),
-            self.TimeRules.BeforeMarketClose(anchor, minutes_before_close),
-            _maybe_final_liquidation
-        )
+            if not candidates:
+                continue
 
-    def _queue_or_trade_now(self, contract: Symbol, quantity: int, tag: str, data: Slice | None):
-        # must be subscribed
-        self._ensure_option_tradable(contract)
+            # Select best candidate pair by ranking high IV slope penalized by distance from slightly OTM (+3%) target strike
+            underlying_price = float(self.Securities[underlying].Price) if underlying in self.Securities else 1.0
+            target_otm_price = underlying_price * 1.03
+            def _rank_score(cand_tuple):
+                m = cand_tuple[0]
+                strike_dist_pct = abs(m["strike"] - target_otm_price) / underlying_price if underlying_price > 0 else 0.0
+                # A negative slope is a GOOD slope (Front IV > Back IV). We rank by magnitude of negative slope penalized by distance from OTM target.
+                return (-m["slope"]) / (1.0 + 10.0 * strike_dist_pct)
 
-        # if we have a Slice (OnData path), only trade when the bar is present
-        if data is not None:
-            if data.ContainsKey(contract) and self.Securities[contract].HasData and self.Securities[contract].Price > 0:
-                self.MarketOrder(contract, quantity, tag=tag)
-                return True
-            return False
+            best_candidate, best_front, best_back = max(candidates, key=_rank_score)
 
-        # scheduled path (no Slice): try a 1-bar history probe; if not available, queue for next OnData
-        hist = self.History(contract, 1, Resolution.Hour)
-        if hasattr(hist, "empty") and not hist.empty:
-            self.MarketOrder(contract, quantity, tag=tag)
+            # Determine Kelly position sizing
+            qty = self.DeterminePositionSize(underlying, best_candidate)
+            if qty <= 0:
+                continue
+
+            # Submit combo market order for calendar spread
+            self.ExecuteCalendarSpread(underlying, best_front, best_back, qty, best_candidate, report_date)
+
+    def IsAlreadyInvested(self, underlying: Symbol) -> bool:
+        """Enforces single-ticker exclusivity and prevents duplicate positions on the same calendar day."""
+        # 1. Daily Lockout: Lock out ticker if an entry was already submitted today for this underlying
+        if (underlying, self.Time.date()) in getattr(self, "_traded_today", set()):
             return True
 
-        # queue and let OnData place it once we get a bar
-        self.pending_option_orders.append((contract, quantity, tag))
-        self.Debug(f"[Queue] Waiting for first bar: {contract}")
+        if underlying in self.active_spreads:
+            return True
+
+        und_val = underlying.Value if hasattr(underlying, "Value") else str(underlying)
+
+        for symbol in self.Portfolio.Keys:
+            s_und = symbol.Underlying if hasattr(symbol, "Underlying") and symbol.Underlying else None
+            s_und_val = s_und.Value if s_und and hasattr(s_und, "Value") else (str(s_und) if s_und else "")
+            if symbol.SecurityType in [SecurityType.Option, SecurityType.IndexOption, SecurityType.FutureOption] and (symbol.Underlying == underlying or s_und_val == und_val):
+                if self.Portfolio[symbol].Invested:
+                    return True
+
+        for contract, _, _ in self.pending_option_orders:
+            c_und = contract.Underlying if hasattr(contract, "Underlying") and contract.Underlying else None
+            c_und_val = c_und.Value if c_und and hasattr(c_und, "Value") else (str(c_und) if c_und else "")
+            if contract.Underlying == underlying or c_und_val == und_val:
+                return True
+
+        open_orders = self.Transactions.GetOpenOrders()
+        for order in open_orders:
+            o_und = order.Symbol.Underlying if hasattr(order.Symbol, "Underlying") and order.Symbol.Underlying else None
+            o_und_val = o_und.Value if o_und and hasattr(o_und, "Value") else (str(o_und) if o_und else "")
+            if order.Symbol.SecurityType in [SecurityType.Option, SecurityType.IndexOption, SecurityType.FutureOption] and (order.Symbol.Underlying == underlying or o_und_val == und_val):
+                return True
+
         return False
 
-    def get_two_closest_option_chains(self, symbol: Symbol, earnings_time: datetime) -> Tuple[
-        List[Symbol], List[Symbol]]:
-        """
-        Two earliest expiries strictly after earnings and now, with 25 <= DTE <= 60.
-        For each expiry, keep ONLY the 2 ATM contracts (CALL + PUT at the ATM strike).
-        """
-        contracts = self.OptionChainProvider.GetOptionContractList(symbol, self.Time)
-        if not contracts:
-            return [], []
-
-        # Group by expiry
-        contracts_by_exp: Dict[datetime, List[Symbol]] = {}
-        for c in contracts:
-            contracts_by_exp.setdefault(c.ID.Date, []).append(c)
-
-        # Underlying price (once)
-        price = None
-        if symbol in self.Securities and self.Securities[symbol].Price > 0:
-            price = float(self.Securities[symbol].Price)
-        if not price or price <= 0:
-            hist = self.History(symbol, 1, Resolution.Minute)
-            if not hist.empty:
-                try:
-                    price = float(hist["close"].iloc[-1])
-                except Exception:
-                    price = None
-        if not price or price <= 0:
-            return [], []  # can’t find ATM without a price
-
-        min_after = max(earnings_time.date(), self.Time.date())
-
-        # DTE window: 25–60 inclusive, strictly after min_after
-        def dte(exp: datetime) -> int:
-            return (exp.date() - self.Time.date()).days
-
-        valid_expiries = sorted(
-            exp for exp in contracts_by_exp
-            if exp.date() > min_after and 25 <= dte(exp) <= 60
-        )
-        if not valid_expiries:
-            return [], []
-
-        front_exp = valid_expiries[0]
-        back_exp = valid_expiries[1] if len(valid_expiries) > 1 else None
-
-        def _atm_pair(chain_contracts: List[Symbol]) -> List[Symbol]:
-            if not chain_contracts:
-                return []
-            # find ATM strike
-            strikes = sorted({float(c.ID.StrikePrice) for c in chain_contracts})
-            if not strikes:
-                return []
-            atm_strike = min(strikes, key=lambda s: abs(s - price))
-            # keep only CALL + PUT at ATM strike (2 contracts max)
-            out = [c for c in chain_contracts if float(c.ID.StrikePrice) == atm_strike]
-            # Prefer returning at most one CALL and one PUT
-            call = next((c for c in out if getattr(c.ID, "Right", None) == OptionRight.Call), None)
-            put = next((c for c in out if getattr(c.ID, "Right", None) == OptionRight.Put), None)
-            return [x for x in (call, put) if x is not None]
-
-        front_list = _atm_pair(contracts_by_exp.get(front_exp, []))
-        if back_exp is None:
-            return front_list, []
-        back_list = _atm_pair(contracts_by_exp.get(back_exp, []))
-        return front_list, back_list
-
     @monitor_execution
-    def get_calls_up_to_two_strikes(self, symbol: Symbol, earnings_time: datetime) -> List[Symbol]:
-        """
-        Return all CALL option contracts for `symbol` that:
-        - Expire strictly after earnings_time,
-        - Expire no more than 45 days afterward,
-        - Are at-the-money (ATM) or up to 2 strikes above ATM.
-        """
-        contracts = self.OptionChainProvider.GetOptionContractList(symbol, self.Time)
+    def GetCallOptionContractsCached(self, symbol: Symbol, earnings_time: datetime) -> List[Symbol]:
+        """Gets Call option contracts expiring after earnings with daily OptionChainProvider caching."""
+        cache_key = (symbol, self.Time.date())
+        if cache_key in self._option_chain_cache:
+            contracts = self._option_chain_cache[cache_key]
+        else:
+            try:
+                contracts = self.OptionChainProvider.GetOptionContractList(symbol, self.Time)
+                self._option_chain_cache[cache_key] = contracts if contracts else []
+            except Exception as e:
+                self.Debug(f"[GetCallOptionContractsCached] Option chain lookup exception for {symbol.Value}: {e}")
+                self._option_chain_cache[cache_key] = []
+                contracts = []
+
         if not contracts:
             return []
 
-        # Get current underlying price
-        price = None
+        price = 0.0
         if symbol in self.Securities and self.Securities[symbol].Price > 0:
             price = float(self.Securities[symbol].Price)
-        if not price or price <= 0:
-            hist = self.History(symbol, 1, Resolution.Minute)
-            if not hist.empty:
-                price = float(hist["close"].iloc[-1])
 
-        if not price or price <= 0:
+        if price <= 0.0:
             return []
 
-        # Expiry window: > earnings_time and within 45 days
         min_date = earnings_time.date()
-        max_date = (earnings_time + timedelta(days=45)).date()
+        max_date = (earnings_time + timedelta(days=self.option_max_exp_days)).date()
 
-        valid = [c for c in contracts
-                 if c.ID.OptionRight == OptionRight.Call
-                 and min_date < c.ID.Date.date() <= max_date]
+        valid = [
+            c for c in contracts
+            if c.ID.OptionRight == OptionRight.Call
+            and min_date < c.ID.Date.date() <= max_date
+        ]
 
         if not valid:
             return []
 
-        # Determine ATM strike
-        strikes = sorted({float(c.ID.StrikePrice) for c in valid})
+        strikes = sorted(list({float(c.ID.StrikePrice) for c in valid}))
         if not strikes:
             return []
 
-        atm = min(strikes, key=lambda s: abs(s - price))
-        strikes_keep = {s for s in strikes if s >= atm and s <= atm + 2 * (strikes[1] - strikes[0])}
+        # Target slightly OTM call strike (~0.40 Delta / +2% to +4% OTM strike above underlying price)
+        otm_strikes = [s for s in strikes if s >= price]
+        target_strike = otm_strikes[0] if otm_strikes else min(strikes, key=lambda s: abs(s - price))
+        strike_idx = strikes.index(target_strike)
+        
+        start_idx = max(0, strike_idx + self.option_lower_filter)
+        end_idx = min(len(strikes) - 1, strike_idx + self.option_upper_filter)
+        allowed_strikes = set(strikes[start_idx:end_idx + 1])
 
-        return [c for c in valid if float(c.ID.StrikePrice) in strikes_keep]
+        return [c for c in valid if float(c.ID.StrikePrice) in allowed_strikes]
 
-    def match_option_contracts_by_strike_and_type_2(self, contracts: List[Symbol]) -> List[Tuple[Symbol, Symbol]]:
+    @monitor_execution
+    def MatchOptionContracts(self, contracts: List[Symbol]) -> List[Tuple[Symbol, Symbol]]:
+        """Pairs Call contracts for each strike:
+        - Near leg (front): Strictly the NEAREST expiration date after earnings.
+        - Far leg (back): The first expiration date that is >= min_days_between_contracts (e.g. 45 days) AFTER the near leg's expiration.
         """
-        From a list of option Symbols, return all pairs (near, next) such that:
-        - Same strike and option right (call/put).
-        - Different expiration dates.
-        Produces only consecutive expiry combinations (E1,E2), (E2,E3) to avoid duplicating the near leg.
-        """
-        from collections import defaultdict
-        from typing import List, Tuple
-
-        if not contracts:
-            return []
-
-        # Bucket by (Right, Strike)
         buckets = defaultdict(list)
         for c in contracts:
             key = (c.ID.OptionRight, float(c.ID.StrikePrice))
@@ -879,161 +409,809 @@ class EarningsVolatilityCrunch(QCAlgorithm):
 
         matches: List[Tuple[Symbol, Symbol]] = []
         for key, lst in buckets.items():
-            # Sort contracts by expiry
             lst.sort(key=lambda x: x.ID.Date)
-            # Only pair consecutive contracts to avoid duplicating the front contract
-            for near, far in zip(lst, lst[1:]):
-                matches.append((near, far))
+            if not lst:
+                continue
 
-        return matches[:20]  # keep top 20 if needed
+            # Front leg is strictly the nearest expiration date after earnings
+            near = lst[0]
 
-    def match_option_contracts_by_strike_and_type(self, near_chain: List[Symbol], next_chain: List[Symbol]) -> List[
-        Tuple[Symbol, Symbol]]:
-        """
-        Match option contracts from two expiration chains by strike and option type (call/put).
+            # Far leg is the first expiration at least min_days_between_contracts (45 days) after near leg's expiration
+            for far in lst[1:]:
+                days_gap = (far.ID.Date.date() - near.ID.Date.date()).days
+                if days_gap >= self.min_days_between_contracts:
+                    matches.append((near, far))
+                    break
 
-        Parameters:
-            near_chain (List[Symbol]): List of option Symbols with earlier expiration
-            next_chain (List[Symbol]): List of option Symbols with later expiration
+        return matches
 
-        Returns:
-            List[Tuple[Symbol, Symbol]]: List of matched option contracts as (near, next)
-        """
-        matches = []
-        next_lookup = {(c.ID.OptionRight, c.ID.StrikePrice): c for c in next_chain}
+    @monitor_execution
+    def GetUnderlyingMetricsCached(self, underlying: Symbol, earnings_date: datetime) -> Optional[Tuple[float, float]]:
+        """Calculates volume ratio and realized volatility with daily targeted caching."""
+        cache_key = (underlying, self.Time.date())
+        if cache_key in self._metrics_cache:
+            return self._metrics_cache[cache_key]
 
-        for near_contract in near_chain:
-            key = (near_contract.ID.OptionRight, near_contract.ID.StrikePrice)
-            if key in next_lookup:
-                matches.append((near_contract, next_lookup[key]))
-        return matches[:20]
+        earnings_date_naive = earnings_date.replace(tzinfo=None)
 
-    def get_implied_volatilities(self,
-                                 near_symbol: Symbol,
-                                 far_symbol: Symbol,
-                                 now: datetime = None,
-                                 earnings_time: datetime = None) -> Tuple[Optional[float], Optional[float]]:
-        """
-        Robust & efficient IV fetch for a near/far option pair.
-        - Mirrors the validations used in calculate_iv_slope_pair (legs must be after max(earnings_time, now)).
-        - Avoids brittle MultiIndex key lookup (no hist.loc[sym]); always grabs the last row safely.
-        - Uses bid/ask mid if present, else trade close.
-        - Gets 1 bar of underlying history (fallback to Security.Price).
-        """
-        import math
-        now = now or self.Time
-        earnings_time = earnings_time or datetime(1970, 1, 1)
+        try:
+            history = self.History(underlying, 35, Resolution.Daily)
+        except Exception:
+            return None
+        if history is None or getattr(history, "empty", True):
+            return None
 
-        def _last_row_safely(hist_df: pd.DataFrame) -> Optional[pd.Series]:
-            if not hasattr(hist_df, 'empty') or hist_df.empty:
+        df = history.loc[underlying] if hasattr(history.index, "levels") and underlying in history.index else history
+        
+        if hasattr(df.index, "tz") and df.index.tz is not None:
+            df = df.tz_localize(None)
+
+        df = df[df.index < earnings_date_naive]
+        if len(df) < 31:
+            return None
+
+        vol_col = 'volume' if 'volume' in df.columns else ('Volume' if 'Volume' in df.columns else None)
+        close_col = 'close' if 'close' in df.columns else ('Close' if 'Close' in df.columns else None)
+        if vol_col is None or close_col is None:
+            return None
+
+        vol_series = df[vol_col]
+        if len(vol_series) < 31:
+            return None
+
+        recent_volume = float(vol_series.iloc[-1])
+        avg_volume = float(vol_series.iloc[-31:-1].mean())
+        if not avg_volume or math.isnan(recent_volume) or math.isnan(avg_volume) or avg_volume <= 0:
+            return None
+
+        vol_ratio = recent_volume / avg_volume
+
+        close_series = df[close_col]
+        if len(close_series) < 31:
+            return None
+
+        closes = close_series.iloc[-31:].astype(float).values
+        if len(closes) < 31 or np.any(np.isnan(closes)) or np.any(closes <= 0):
+            return None
+
+        logrets = np.log(closes[1:] / closes[:-1])
+        rv = float(logrets.std(ddof=1)) * math.sqrt(252.0)
+
+        if math.isnan(rv) or rv <= 0:
+            return None
+
+        res = (vol_ratio, rv)
+        self._metrics_cache[cache_key] = res
+        return res
+
+    @monitor_execution
+    def CalculateMetrics(self, underlying: Symbol, front: Symbol, back: Symbol, earnings_date: datetime, vol_ratio: float, rv: float) -> Optional[Dict[str, Any]]:
+        """Calculates slope, volume ratio, and IV/RV ratio using a 3-tier short-circuit early filtering cascade."""
+        # Tier 1 Gate (Stock Level): Volume Ratio Gate (0 BSM Solves)
+        if not self.pass_all and vol_ratio < self.volume_threshold:
+            return None
+
+        front_exp = front.ID.Date
+        back_exp = back.ID.Date
+        if not (front_exp < back_exp):
+            return None
+        if front_exp.date() <= max(earnings_date.date(), self.Time.date()):
+            return None
+
+        front_price = self.GetOptionMidPrice(front)
+        underlying_price = float(self.Securities[underlying].Price) if underlying in self.Securities else 0.0
+
+        if front_price <= 0.0 or underlying_price <= 0.0:
+            return None
+
+        T_front = max((front_exp - self.Time).total_seconds(), 0.0) / (365.0 * 24 * 3600)
+        if T_front <= 0.0:
+            return None
+
+        # Tier 2 Gate (Near Option Level): Solve Near Option IV & Check IV/RV Ratio (Saved far option BSM solve!)
+        near_iv = self._implied_volatility_newton(front.ID.OptionRight, underlying_price, float(front.ID.StrikePrice), T_front, self.risk_free_rate, front_price)
+        if near_iv is None or near_iv <= 0.0:
+            return None
+
+        ivrv_ratio = near_iv / rv
+        if not self.pass_all and ivrv_ratio < self.ivrv_threshold:
+            return None
+
+        # Tier 3 Gate (Far Option Level): Solve Far Option IV & Check IV Term Structure Slope
+        back_price = self.GetOptionMidPrice(back)
+        if back_price <= 0.0:
+            return None
+
+        T_back = max((back_exp - self.Time).total_seconds(), 0.0) / (365.0 * 24 * 3600)
+        if T_back <= 0.0:
+            return None
+
+        far_iv = self._implied_volatility_newton(back.ID.OptionRight, underlying_price, float(back.ID.StrikePrice), T_back, self.risk_free_rate, back_price)
+        if far_iv is None or far_iv <= 0.0:
+            return None
+
+        front_dte = int((front_exp.date() - self.Time.date()).days)
+        back_dte = int((back_exp.date() - self.Time.date()).days)
+        diff_dte = front_dte - back_dte
+
+        if diff_dte >= 0:
+            return None
+
+        # Formula: (FRONT_IV - BACK_IV) / (front_dte - back_dte)
+        # Note: diff_dte is negative (e.g. 7 - 52 = -45). A negative slope represents high front IV crunch potential (GOOD SLOPE).
+        slope = (near_iv - far_iv) / float(diff_dte)
+        if not self.pass_all and slope > self.slope_threshold:
+            return None
+
+        option_iv_ratio = near_iv / far_iv if far_iv > 0 else 1.0
+        if not self.pass_all and option_iv_ratio < self.min_iv_ratio:
+            return None
+
+        front_sec = self.Securities[front] if front in self.Securities else None
+        back_sec = self.Securities[back] if back in self.Securities else None
+        
+        front_bid = float(front_sec.BidPrice) if front_sec and hasattr(front_sec, "BidPrice") else 0.0
+        front_ask = float(front_sec.AskPrice) if front_sec and hasattr(front_sec, "AskPrice") else 0.0
+        back_bid = float(back_sec.BidPrice) if back_sec and hasattr(back_sec, "BidPrice") else 0.0
+        back_ask = float(back_sec.AskPrice) if back_sec and hasattr(back_sec, "AskPrice") else 0.0
+
+        front_spread = round(abs(front_ask - front_bid), 4)
+        back_spread = round(abs(back_ask - back_bid), 4)
+        comb_spread = round(front_spread + back_spread, 4)
+
+        if not self.pass_all and self.max_spread_threshold > 0:
+            if front_spread > self.max_spread_threshold or back_spread > self.max_spread_threshold or comb_spread > self.max_spread_threshold:
                 return None
-            # Whether flat index or MultiIndex, the last row corresponds to the (only) symbol we requested
-            try:
-                return hist_df.iloc[-1]
-            except Exception:
-                return None
 
-        def _latest_underlying_close(under_sym: Symbol) -> Optional[float]:
-            # Prefer 1 daily bar; fallback to Security.Price
+        return {
+            "slope": round(float(slope), 5),
+            "front_iv": round(float(near_iv), 5),
+            "back_iv": round(float(far_iv), 5),
+            "iv_ratio": round(float(option_iv_ratio), 5),
+            "front_dte": front_dte,
+            "back_dte": back_dte,
+            "vol_ratio": round(float(vol_ratio), 5),
+            "ivrv_ratio": round(float(ivrv_ratio), 5),
+            "strike": float(front.ID.StrikePrice),
+            "front_price": front_price,
+            "back_price": back_price,
+            "front_spread": front_spread,
+            "back_spread": back_spread,
+            "comb_spread": comb_spread,
+            "edate": earnings_date.strftime("%Y-%m-%d")
+        }
+
+    def DeterminePositionSize(self, underlying: Symbol, metrics: Dict[str, Any]) -> int:
+        """Determines options quantity utilizing Kelly Criterion sizing."""
+        history = self.trade_history[underlying]
+        
+        if len(history) < 5:
+            kelly_fraction = 0.10
+        else:
+            wins = sum(1 for x in history if x["pnl"] > 0)
+            losses = sum(1 for x in history if x["pnl"] <= 0)
+            win_rate = wins / len(history)
+            
+            avg_win = np.mean([x["pnl"] for x in history if x["pnl"] > 0]) if wins > 0 else 0.0
+            avg_loss = abs(np.mean([x["pnl"] for x in history if x["pnl"] <= 0])) if losses > 0 else 1.0
+            win_loss_ratio = avg_win / avg_loss if avg_loss > 0 else 1.0
+            
+            kelly_fraction = win_rate - (1 - win_rate) / win_loss_ratio
+
+        kelly_fraction = max(0.0, min(kelly_fraction, 1.0)) * self.kelly_factor
+        
+        # Scale dollar allocation to target ~$1,000 per trade
+        max_trade_dollar_cap = float(self.GetParameter("risk.max_trade_allocation", "1000.0"))
+        allocation = min(self.Portfolio.TotalPortfolioValue * kelly_fraction, max_trade_dollar_cap)
+
+        spread_cost = abs(metrics["back_price"] - metrics["front_price"]) * 100.0
+        if spread_cost <= 0.0:
+            return 0
+
+        raw_qty = int(math.floor(allocation / spread_cost))
+        
+        # Cap combo contracts at 10 (10 short + 10 long = 20 contracts total per trade)
+        max_combo_contracts = int(self.GetParameter("risk.max_combo_contracts", "10"))
+        qty = max(0, min(raw_qty, max_combo_contracts))
+        return qty
+
+    def LogTradeRecord(self, action: str, underlying: Symbol, front: Symbol, back: Symbol, qty: int, entry_price: float, metrics: Dict[str, Any], pk: str, exit_price: float = 0.0, pnl: float = 0.0, exit_reason: str = "") -> None:
+        """Logs structured JSON record of trade metadata for BigQuery ingestion."""
+        param_dict = {
+            "front_iv": round(float(metrics.get("front_iv", 0.0)), 5),
+            "back_iv": round(float(metrics.get("back_iv", 0.0)), 5),
+            "iv_ratio": round(float(metrics.get("iv_ratio", 0.0)), 5),
+            "front_dte": int(metrics.get("front_dte", 0)),
+            "back_dte": int(metrics.get("back_dte", 0)),
+            "vol_ratio": round(float(metrics.get("vol_ratio", 0.0)), 5),
+            "slope": round(float(metrics.get("slope", 0.0)), 5),
+            "ivrv_ratio": round(float(metrics.get("ivrv_ratio", 0.0)), 5),
+            "comb_spread": round(float(metrics.get("comb_spread", 0.0)), 4),
+            "mae_pct": round(float(metrics.get("mae_pct", 0.0)), 2),
+            "mfe_pct": round(float(metrics.get("mfe_pct", 0.0)), 2),
+            "holding_hours": round(float(metrics.get("holding_hours", 0.0)), 2),
+            "exit_reason": exit_reason
+        }
+        
+        record = {
+            "pk": pk,
+            "backtestId": self.backtest_run_id,
+            "backtest_run_id": self.backtest_run_id,
+            "algo_code": "4EVC",
+            "timestamp": self.Time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "underlying": underlying.Value,
+            "action": action,
+            "qty": qty,
+            "strike": float(front.ID.StrikePrice),
+            "near_expiry": str(front.ID.Date.date()),
+            "far_expiry": str(back.ID.Date.date()),
+            "earnings_date": str(metrics.get("edate", "")),
+            "vol_ratio": round(float(metrics.get("vol_ratio", 0.0)), 5),
+            "slope": round(float(metrics.get("slope", 0.0)), 5),
+            "ivrv_ratio": round(float(metrics.get("ivrv_ratio", 0.0)), 5),
+            "entry_price": round(entry_price, 5),
+            "exit_price": round(exit_price, 5),
+            "pnl": round(pnl, 5),
+            "exit_reason": exit_reason,
+            "parameters": json.dumps(param_dict, separators=(',', ':'))
+        }
+        self.Log(f"[BIGQUERY_TRADE_RECORD] {json.dumps(record, separators=(',', ':'))}")
+
+    def OnOrderEvent(self, orderEvent: OrderEvent) -> None:
+        """Handles order execution events, confirming entry and exit fills to calculate exact 100% executed fill prices."""
+        order_id = orderEvent.OrderId
+        if orderEvent.Status == OrderStatus.Filled:
+            # 1. Entry Order Fill Handling
+            if order_id in self._pending_entry_tickets:
+                info = self._pending_entry_tickets[order_id]
+                underlying = info["underlying"]
+                symbol = orderEvent.Symbol
+                fill_price = float(orderEvent.FillPrice)
+                
+                info.setdefault("entry_fills", {})[symbol] = fill_price
+
+                # When both entry legs fill, calculate actual net debit paid and log OPEN record
+                if info["front"] in info["entry_fills"] and info["back"] in info["entry_fills"]:
+                    if not info.get("logged_open", False):
+                        info["logged_open"] = True
+                        front_fill = info["entry_fills"][info["front"]]
+                        back_fill = info["entry_fills"][info["back"]]
+                        actual_debit = round(abs(back_fill - front_fill), 5)
+                        if actual_debit > 0:
+                            info["entry_price"] = actual_debit
+
+                        self.active_spreads[underlying] = info
+                        self.LogTradeRecord("OPEN", underlying, info["front"], info["back"], info["qty"], info["entry_price"], info["metrics"], pk=info["pk"])
+                        self.Log(f"[ORDER EVENT FILL] Confirmed entry fill for {underlying.Value} at actual debit ${info['entry_price']:.2f}. Added to active spreads.")
+                        
+                        # Clean up pending entry tickets
+                        tickets = info.get("tickets", [])
+                        for t in tickets:
+                            self._pending_entry_tickets.pop(t.OrderId, None)
+
+            # 2. Exit Order Fill Handling (Calculates actual 100% executed fill prices)
+            elif order_id in self._pending_exit_tickets:
+                info = self._pending_exit_tickets[order_id]
+                underlying = info["underlying"]
+                symbol = orderEvent.Symbol
+                fill_price = float(orderEvent.FillPrice)
+
+                info.setdefault("exit_fills", {})[symbol] = fill_price
+
+                # Check if both exit legs have completed fill
+                if info["front"] in info["exit_fills"] and info["back"] in info["exit_fills"]:
+                    if not info.get("logged_close", False):
+                        info["logged_close"] = True
+                        front_exit_fill = info["exit_fills"][info["front"]]
+                        back_exit_fill = info["exit_fills"][info["back"]]
+                        
+                        # Actual net exit credit received from 100% real execution fills
+                        actual_exit_credit = round(back_exit_fill - front_exit_fill, 5)
+                        # Clamped non-negative exit credit for long debit spread
+                        exit_price = max(0.0, actual_exit_credit)
+                        
+                        entry_debit = info["entry_price"]
+                        realized_pnl = round((exit_price - entry_debit) / entry_debit, 5) if entry_debit > 0 else 0.0
+                        
+                        # Enforce max loss floor of -100% (-1.0) for long calendar debit spread
+                        pnl = max(-1.0, realized_pnl)
+                        
+                        exit_reason = info.get("exit_reason", "Liquidation")
+                        pk = info.get("pk", "unknown")
+                        qty = info["qty"]
+
+                        entry_time = info.get("entry_time", self.Time)
+                        holding_hours = round((self.Time - entry_time).total_seconds() / 3600.0, 2)
+
+                        metrics = {
+                            "vol_ratio": info["vol_ratio"],
+                            "slope": info["slope"],
+                            "ivrv_ratio": info["ivrv_ratio"],
+                            "mae_pct": info.get("mae_pct", 0.0),
+                            "mfe_pct": info.get("mfe_pct", 0.0),
+                            "holding_hours": holding_hours
+                        }
+                        
+                        self.trade_history[underlying].append({
+                            "pnl": pnl,
+                            "entry_slope": info["slope"],
+                            "entry_vol_ratio": info["vol_ratio"],
+                            "entry_ivrv_ratio": info["ivrv_ratio"],
+                            "exit_time": self.Time.isoformat()
+                        })
+                        self.trade_history[underlying] = self.trade_history[underlying][-20:]
+
+                        self.LogTradeRecord("CLOSE", underlying, info["front"], info["back"], qty, entry_debit, metrics, pk=pk, exit_price=exit_price, pnl=pnl, exit_reason=exit_reason)
+                        self.Log(f"[ORDER EVENT EXIT FILL] Confirmed exit fill for {underlying.Value} at credit ${exit_price:.2f} (Realized PnL: {pnl*100:.2f}% | MAE: {info.get('mae_pct', 0.0):.2f}% | MFE: {info.get('mfe_pct', 0.0):.2f}% | Duration: {holding_hours}h).")
+
+                        self.UnsubscribeOption(info["front"])
+                        self.UnsubscribeOption(info["back"])
+                        self.active_spreads.pop(underlying, None)
+                        
+                        # Clean up pending exit tickets
+                        for o_id in list(self._pending_exit_tickets.keys()):
+                            if self._pending_exit_tickets[o_id] is info:
+                                self._pending_exit_tickets.pop(o_id, None)
+
+        elif orderEvent.Status in [OrderStatus.Canceled, OrderStatus.Invalid]:
+            if order_id in self._pending_entry_tickets:
+                self._pending_entry_tickets.pop(order_id, None)
+            if order_id in self._pending_exit_tickets:
+                self._pending_exit_tickets.pop(order_id, None)
+
+    def ExecuteCalendarSpread(self, underlying: Symbol, front: Symbol, back: Symbol, qty: int, metrics: Dict[str, Any], report_date: datetime) -> None:
+        """Executes a native QuantConnect CallCalendar strategy order for the calendar spread."""
+        if not self._ensure_option_tradable(front) or not self._ensure_option_tradable(back):
+            return
+
+        # Prepare legs for atomic combo limit order
+        legs = [
+            Leg.Create(front, -1),  # Sell near-term option
+            Leg.Create(back, 1)     # Buy far-term option
+        ]
+
+        natural_ask = metrics["back_price"] - metrics["front_price"]
+        
+        # In pass_all / data collection mode, execute as market order if natural ask is <= 0
+        if self.pass_all and natural_ask <= 0:
+            tickets = self.ComboMarketOrder(legs, qty)
+        else:
+            if self.pass_all:
+                limit_price = round(natural_ask * (1.0 + self.alpha_spread), 2)
+            else:
+                limit_price = round(natural_ask, 2)
+            limit_price = max(0.01, limit_price)
+            tickets = self.ComboLimitOrder(legs, qty, limit_price)
+
+        self.trade_id_counter += 1
+        pk = f"{self.backtest_run_id}_{underlying.Value}_{self.trade_id_counter}"
+
+        # Target exit time: 10:00 AM EST on the morning after earnings announcement
+        exit_date = (report_date + timedelta(days=self.days_after_earnings + 1)).date()
+        target_exit_time = datetime.combine(exit_date, time(self.exit_hour, 0))
+
+        position_info = {
+            "pk": pk,
+            "underlying": underlying,
+            "front": front,
+            "back": back,
+            "qty": qty,
+            "entry_price": abs(metrics["back_price"] - metrics["front_price"]),
+            "entry_time": self.Time,
+            "report_date": report_date,
+            "exit_time": target_exit_time,
+            "tickets": tickets,
+            "slope": metrics["slope"],
+            "vol_ratio": metrics["vol_ratio"],
+            "ivrv_ratio": metrics["ivrv_ratio"],
+            "mae_pct": 0.0,
+            "mfe_pct": 0.0,
+            "metrics": metrics,
+            "entry_fills": {},
+            "exit_fills": {}
+        }
+
+        # Track position info for active spread and register pending entry tickets
+        self.active_spreads[underlying] = position_info
+
+        # Enforce single-entry per calendar day for this ticker and remove from earnings calendar
+        self._traded_today.add((underlying, self.Time.date()))
+        self.earnings_calendar.pop(underlying, None)
+
+        near_tag = self.BuildOrderTag(underlying, front, back, metrics, "SHORT")
+        far_tag = self.BuildOrderTag(underlying, front, back, metrics, "LONG")
+
+        if tickets:
+            for ticket in tickets:
+                self._pending_entry_tickets[ticket.OrderId] = position_info
+                try:
+                    uf = UpdateOrderFields()
+                    uf.Tag = near_tag if ticket.Symbol == front else far_tag
+                    ticket.Update(uf)
+                except Exception as e:
+                    self.Debug(f"[TagUpdate] Failed for {ticket.Symbol.Value}: {e}")
+
+        self.Log(f"[TRADE SIGNAL ENTRY] Time: {self.Time} | Ticker: {underlying.Value} | Qty: {qty} | Front: {front.Value} | Back: {back.Value} | Slope: {metrics['slope']:.5f} | VolRatio: {metrics['vol_ratio']:.2f} | IV/RV: {metrics['ivrv_ratio']:.2f} | PassAll: {self.pass_all}")
+
+    def ManageOpenPositions(self, data: Slice) -> None:
+        """Monitors positions for time-based targets, stop losses, and expiration risks."""
+        liquidated_underlyings = []
+
+        for underlying, position in list(self.active_spreads.items()):
+            # Update MAE and MFE on every bar tick
+            entry_debit = float(position.get("entry_price", 0.0))
+            front = position.get("front")
+            back = position.get("back")
+            if front and back and entry_debit > 0:
+                front_sec = self.Securities.get(front)
+                back_sec = self.Securities.get(back)
+                if front_sec and back_sec:
+                    f_ask = float(front_sec.AskPrice) if hasattr(front_sec, "AskPrice") else 0.0
+                    b_bid = float(back_sec.BidPrice) if hasattr(back_sec, "BidPrice") else 0.0
+                    if f_ask > 0 and b_bid > 0:
+                        cur_credit = b_bid - f_ask
+                        cur_ret_pct = round(((cur_credit - entry_debit) / entry_debit) * 100.0, 2)
+                        position["mae_pct"] = min(position.get("mae_pct", 0.0), cur_ret_pct)
+                        position["mfe_pct"] = max(position.get("mfe_pct", 0.0), cur_ret_pct)
+
+            entry_time = position.get("entry_time", self.Time)
+            
+            # Guard: Require position to have been entered on a prior calendar date before time-based exit can trigger
+            is_different_day = self.Time.date() > entry_time.date()
+
+            if position.get("is_liquidating", False):
+                continue
+
+            # Exit logic: Exit 1 hour post-market-open after earnings
+            if self.Time >= position.get("exit_time", datetime.max):
+                placed = self.LiquidateSpread(underlying, "Time-Based Exit (1-Hour Post-Market-Open Crush)")
+                if placed:
+                    liquidated_underlyings.append(underlying)
+                continue
+
+        for u in liquidated_underlyings:
+            self.active_spreads.pop(u, None)
+
+    def SweepOrphanedOptionLegs(self) -> None:
+        """Scans portfolio for any option contracts held without an active paired calendar spread entry."""
+        active_contracts = set()
+        active_underlyings = set(self.active_spreads.keys())
+
+        for pos in self.active_spreads.values():
+            if "front" in pos:
+                active_contracts.add(pos["front"])
+            if "back" in pos:
+                active_contracts.add(pos["back"])
+
+        for pos in getattr(self, "_pending_exit_tickets", {}).values():
+            if isinstance(pos, dict):
+                if "front" in pos:
+                    active_contracts.add(pos["front"])
+                if "back" in pos:
+                    active_contracts.add(pos["back"])
+
+        for sec in list(self.Portfolio.Values):
+            if sec.Invested and sec.Symbol.SecurityType in [SecurityType.Option, SecurityType.IndexOption]:
+                if sec.Symbol in active_contracts:
+                    continue
+                
+                und = sec.Symbol.Underlying if hasattr(sec.Symbol, "Underlying") and sec.Symbol.Underlying else None
+                if und and und in active_underlyings:
+                    continue
+
+                open_orders = self.Transactions.GetOpenOrders(sec.Symbol)
+                if not open_orders:
+                    self.Log(f"[ORPHAN SWEEPER] Liquidating unhedged orphaned option leg: {sec.Symbol.Value} Qty: {sec.Quantity}")
+                    self.MarketOrder(sec.Symbol, -sec.Quantity, tag="FLATTEN: Orphaned Long Leg Sweep")
+
+    def LiquidateSpread(self, underlying: Symbol, tag: str) -> bool:
+        """Offsetting combo strategy order to flatten active calendar spread legs together."""
+        if underlying not in self.active_spreads:
+            return False
+
+        position = self.active_spreads[underlying]
+        if position.get("is_liquidating", False):
+            return False
+
+        front = position["front"]
+        back = position["back"]
+        qty = position["qty"]
+        pk = position.get("pk", "unknown")
+
+        front_qty = abs(self.Portfolio[front].Quantity) if self.Portfolio.ContainsKey(front) else 0
+        back_qty = abs(self.Portfolio[back].Quantity) if self.Portfolio.ContainsKey(back) else 0
+
+        # Absolute Guard: Do NOT send liquidation orders if portfolio holds 0 contracts for both legs
+        if front_qty == 0 and back_qty == 0:
+            self.Debug(f"[LiquidateSpread] Purging active_spreads for {underlying.Value}: legs not held in portfolio.")
+            self.UnsubscribeOption(front)
+            self.UnsubscribeOption(back)
+            self.active_spreads.pop(underlying, None)
+            return True
+
+        # Close legs together using atomic combo limit order (floor limit price at $0.00 so exit credit is never negative)
+        combo_qty = min(front_qty, back_qty)
+        exit_tickets = []
+        if combo_qty > 0:
+            exit_legs = [
+                Leg.Create(front, 1),   # Buy back short near call
+                Leg.Create(back, -1)   # Sell long far call
+            ]
+            front_sec = self.Securities[front] if front in self.Securities else None
+            back_sec = self.Securities[back] if back in self.Securities else None
+            front_ask = float(front_sec.AskPrice) if front_sec and hasattr(front_sec, "AskPrice") else 0.0
+            back_bid = float(back_sec.BidPrice) if back_sec and hasattr(back_sec, "BidPrice") else 0.0
+
+            net_entry_debit = float(position.get("net_debit_paid", 0.0))
+            max_allowed_exit_debit = max(net_entry_debit * 0.05, 0.05) if net_entry_debit > 0 else 0.05
+
+            if front_ask > 0 and back_bid > 0:
+                natural_credit = back_bid - front_ask
+                if natural_credit >= -max_allowed_exit_debit:
+                    limit_credit = round(natural_credit, 2)
+                    if limit_credit >= 0.01:
+                        exit_tickets = self.ComboLimitOrder(exit_legs, combo_qty, limit_credit, tag=tag)
+                    else:
+                        exit_tickets = self.ComboMarketOrder(exit_legs, combo_qty, tag=tag)
+                else:
+                    # If natural credit is more negative than -max_allowed_exit_debit, closing early costs excessive debit (> -105% loss).
+                    # Skip market liquidation; let short near call be assigned/expire naturally so long far call hedges it, capping loss at -100%.
+                    self.Log(f"LiquidateSpread: Skipped early exit for {underlying} (exit credit {natural_credit:.2f} exceeds -105% loss floor relative to entry debit {net_entry_debit:.2f})")
+                    return False
+            else:
+                # If quotes are unavailable or zero, do not force market exit if it might cost debit
+                self.Log(f"LiquidateSpread: Insufficient quote data to close {underlying} (front_ask={front_ask}, back_bid={back_bid})")
+                return False
+
+        if not exit_tickets:
+            return False
+
+        # Mark position as liquidating only if exit tickets were submitted
+        position["is_liquidating"] = True
+        position["exit_reason"] = tag
+
+        # Cancel any pending entry tickets if unfilled
+        tickets = position.get("tickets", [])
+        for t in tickets:
+            if t.Status in [OrderStatus.Submitted, OrderStatus.New]:
+                try:
+                    t.Cancel("Canceling pending entry ticket prior to liquidation")
+                except Exception:
+                    pass
+
+        # Register exit tickets for tracking 100% real fill prices in OnOrderEvent
+        close_tag = f"CLOSE:{tag}"
+        for t in exit_tickets:
+            self._pending_exit_tickets[t.OrderId] = position
             try:
-                hist = self.History(under_sym, 1, Resolution.Daily)
+                uf = UpdateOrderFields()
+                uf.Tag = close_tag
+                t.Update(uf)
             except Exception:
-                hist = None
-            if hist is not None and hasattr(hist, 'empty') and not hist.empty:
-                row = _last_row_safely(hist)
-                if row is not None and 'close' in row:
+                pass
+
+        return True
+
+    def ProcessPendingOrders(self, data: Slice) -> None:
+        """Drains pending orders waiting for market feed availability."""
+        still_pending = []
+        for contract, qty, tag in self.pending_option_orders:
+            if data.ContainsKey(contract) and self.Securities[contract].HasData and self.Securities[contract].Price > 0:
+                self.MarketOrder(contract, qty, tag=f"fulfilled {tag}")
+            else:
+                still_pending.append((contract, qty, tag))
+        self.pending_option_orders = still_pending
+
+    def PurgeExpiredEarnings(self, purge_days: int = 5) -> None:
+        """Cleans calendar cache of old announcements, daily caches, and uninvested option securities."""
+        cutoff = self.Time - timedelta(days=purge_days)
+        self.earnings_calendar = {
+            sym: dt for sym, dt in self.earnings_calendar.items() if dt >= cutoff
+        }
+
+        # Purge daily metrics and option chain caches older than 5 days
+        cutoff_date = cutoff.date()
+        self._metrics_cache = {
+            k: v for k, v in self._metrics_cache.items() if k[1] >= cutoff_date
+        }
+        self._option_chain_cache = {
+            k: v for k, v in self._option_chain_cache.items() if k[1] >= cutoff_date
+        }
+
+        # Explicitly remove uninvested option securities to prevent LEAN memory growth
+        active_contracts = self._get_active_spread_contracts()
+        for sec in list(self.Securities.Values):
+            if sec.Symbol.SecurityType in [SecurityType.Option, SecurityType.IndexOption] and not sec.Invested:
+                if sec.Symbol not in active_contracts:
                     try:
-                        c = float(row['close'])
-                        if c > 0:
-                            return c
+                        self.RemoveOptionContract(sec.Symbol)
+                    except Exception:
+                        try:
+                            self.RemoveSecurity(sec.Symbol)
+                        except Exception:
+                            pass
+                    if sec.Symbol in self._subscribed_options:
+                        self._subscribed_options.remove(sec.Symbol)
+
+        # Force explicit Python Garbage Collection every 5 days to unhook PyObject wrappers
+        try:
+            import gc
+            gc.collect()
+        except Exception:
+            pass
+
+    def RegisterFinalLiquidation(self, anchor_ticker: str = "SPY", minutes_before_close: int = 120) -> None:
+        """Schedules market-close final liquidation rule near EndDate."""
+        self._final_liquidated = False
+        self._algo_end_date = self.EndDate.date()
+        anchor = self.AddEquity(anchor_ticker, Resolution.Hour).Symbol
+
+        def _maybe_final_liquidation():
+            if self._final_liquidated:
+                return
+            if (self.Time.date() + timedelta(days=1)) >= self._algo_end_date:
+                self.Transactions.CancelOpenOrders()
+                for underlying in list(self.active_spreads.keys()):
+                    self.LiquidateSpread(underlying, "End-of-Backtest Liquidation")
+                self.Liquidate()
+                self._final_liquidated = True
+
+        def _cancel_unfilled_entry_orders():
+            open_orders = self.Transactions.GetOpenOrders()
+            for order in open_orders:
+                if order.Status in [OrderStatus.Submitted, OrderStatus.New]:
+                    try:
+                        self.Transactions.CancelOrder(order.Id, "EOD: Canceling unfilled entry limit order")
+                    except Exception as e:
+                        self.Debug(f"[EOD Cancel] Failed for order #{order.Id}: {e}")
+
+            # Clean up active_spreads ONLY for positions where NO tickets filled AND NO option legs are held
+            to_purge = []
+            for underlying, pos in list(self.active_spreads.items()):
+                front = pos.get("front")
+                back = pos.get("back")
+                entry_fills = pos.get("entry_fills", {})
+                
+                fq = abs(self.Portfolio[front].Quantity) if front and self.Portfolio.ContainsKey(front) else 0
+                bq = abs(self.Portfolio[back].Quantity) if back and self.Portfolio.ContainsKey(back) else 0
+                
+                # If neither leg is invested AND entry_fills has no fills, then purge
+                if fq == 0 and bq == 0 and not entry_fills:
+                    to_purge.append(underlying)
+            for u in to_purge:
+                self.active_spreads.pop(u, None)
+
+        self.Schedule.On(
+            self.DateRules.EveryDay(anchor),
+            self.TimeRules.BeforeMarketClose(anchor, 5),
+            _cancel_unfilled_entry_orders
+        )
+
+        self.Schedule.On(
+            self.DateRules.EveryDay(anchor),
+            self.TimeRules.BeforeMarketClose(anchor, minutes_before_close),
+            _maybe_final_liquidation
+        )
+
+    def OnEndOfAlgorithm(self) -> None:
+        """Native LEAN lifecycle hook: Closes 100% of open positions on final backtest bar with structured exit tag."""
+        self.Log(f"[OnEndOfAlgorithm] Backtest ending. Liquidating {len(self.active_spreads)} active spreads...")
+        
+        # 1. Liquidate all active calendar spreads with exit_reason tag for BigQuery grouping
+        for underlying in list(self.active_spreads.keys()):
+            self.LiquidateSpread(underlying, "End-of-Backtest Liquidation")
+
+        # 2. Cancel any remaining open orders
+        try:
+            self.Transactions.CancelOpenOrders()
+        except Exception:
+            pass
+
+        # 3. Liquidate any leftover portfolio securities
+        try:
+            self.Liquidate()
+        except Exception:
+            pass
+
+    def _ensure_option_tradable(self, contract: Symbol, res: Resolution = Resolution.Hour) -> bool:
+        """Subscribes to option contract safely handling delisted underlying assets."""
+        if not self.Securities.ContainsKey(contract):
+            try:
+                o = self.AddOptionContract(contract, res)
+                o.SetOptionAssignmentModel(NullOptionAssignmentModel())
+            except Exception as e:
+                self.Debug(f"[_ensure_option_tradable] Cannot subscribe to {contract.Value} (delisted or invalid): {e}")
+                return False
+        self._subscribed_options.add(contract)
+
+        u = contract.Underlying
+        if self.Securities.ContainsKey(u):
+            self.Securities[u].SetDataNormalizationMode(DataNormalizationMode.Raw)
+        return True
+
+    def UnsubscribeOption(self, contract: Symbol) -> None:
+        """Purges contract from active algorithm tracking and explicitly removes security from LEAN engine RAM."""
+        try:
+            if contract in self._subscribed_options:
+                self._subscribed_options.remove(contract)
+            if self.Securities.ContainsKey(contract):
+                try:
+                    self.RemoveOptionContract(contract)
+                except Exception:
+                    try:
+                        self.RemoveSecurity(contract)
                     except Exception:
                         pass
-            # Fallback
-            sec = self.Securities.get(under_sym, None)
-            if sec is not None and sec.HasData and sec.Price > 0:
+        except Exception as e:
+            self.Debug(f"[UnsubscribeOption] Failed to remove tracking for {contract.Value}: {e}")
+
+    def _get_active_spread_contracts(self) -> Set[Symbol]:
+        """Helper returning all option symbols currently held in active spreads."""
+        res = set()
+        for pos in self.active_spreads.values():
+            if "front" in pos:
+                res.add(pos["front"])
+            if "back" in pos:
+                res.add(pos["back"])
+        return res
+
+    def GetOptionMidPrice(self, sym: Symbol) -> float:
+        """Retrieves bid/ask mid-price directly from Securities (NO History calls)."""
+        if sym in self.Securities:
+            sec = self.Securities[sym]
+            bid = float(sec.BidPrice)
+            ask = float(sec.AskPrice)
+            if bid > 0 and ask > 0:
+                return (bid + ask) / 2.0
+            if float(sec.Price) > 0:
                 return float(sec.Price)
-            return None
+        return 0.0
 
-        def _option_mid_close(sym: Symbol) -> Optional[float]:
-            # Count-based history is faster and avoids tz windows
-            try:
-                hist = self.History(sym, 15, Resolution.Daily)
-            except Exception:
-                return None
-            row = _last_row_safely(hist)
-            if row is None:
-                return None
-            # Try bid/ask mid first
-            bid = row['bidclose'] if 'bidclose' in row else None
-            ask = row['askclose'] if 'askclose' in row else None
-            if bid is not None and ask is not None:
-                try:
-                    mid = (float(ask) + float(bid)) / 2.0
-                    if mid > 0:
-                        return mid
-                except Exception:
-                    pass
-            # Fallback to trade close
-            if 'close' in row:
-                try:
-                    c = float(row['close'])
-                    if c > 0:
-                        return c
-                except Exception:
-                    pass
-            return None
+    def BuildOrderTag(self, symbol: Symbol, front: Symbol, back: Symbol, metrics: Dict[str, Any], side: str, trade_id: Optional[str] = None) -> str:
+        """Generates compact JSON order tag."""
+        t_id = trade_id or metrics.get("trade_id") or f"T_{symbol.Value}_{self.Time.strftime('%Y%m%d_%H%M%S')}"
+        payload = {
+            "u": symbol.Value,
+            "trade_id": t_id,
+            "leg": side,
+            "k": metrics.get("strike", float(front.ID.StrikePrice)),
+            "near": str(front.ID.Date.date()),
+            "far": str(back.ID.Date.date()),
+            "edate": str(metrics.get("edate", "")),
+            "front_iv": round(float(metrics.get("front_iv", 0.0)), 5),
+            "back_iv": round(float(metrics.get("back_iv", 0.0)), 5),
+            "iv_ratio": round(float(metrics.get("iv_ratio", 0.0)), 5),
+            "front_dte": int(metrics.get("front_dte", 0)),
+            "back_dte": int(metrics.get("back_dte", 0)),
+            "slope": round(float(metrics.get("slope", 0.0)), 5),
+            "ivrv": round(float(metrics.get("ivrv_ratio", 0.0)), 5),
+            "vol_ratio": round(float(metrics.get("vol_ratio", 0.0)), 5),
+            "spread": round(float(metrics.get("comb_spread", 0.0)), 4),
+            "ts": self.Time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        }
+        s = json.dumps(payload, separators=(",", ":"))
+        return s[:1024]
 
-        def _compute_iv(sym: Symbol) -> Optional[float]:
-            exp = sym.ID.Date
-            # Validate vs earnings and now, must be strictly in the future
-            min_cut = max(earnings_time.date(), now.date())
-            if exp.date() <= min_cut:
-                return None
-
-            opt_px = _option_mid_close(sym)
-            if opt_px is None or opt_px <= 0:
-                return None
-
-            under_sym = sym.Underlying
-            S = _latest_underlying_close(under_sym)
-            if S is None or S <= 0:
-                return None
-
-            T = max((exp - now).total_seconds(), 0.0) / (365.0 * 24 * 3600)
-            if T <= 0:
-                return None
-
-            K = float(sym.ID.StrikePrice)
-            r = 0.0
-
-            # Use option-right aware pricer/vega
-            return self._implied_volatility_newton(sym.ID.OptionRight, S, K, T, r, opt_px)
-
-        near_iv = _compute_iv(near_symbol)
-        far_iv = _compute_iv(far_symbol)
-        return near_iv, far_iv
-
-    # --- Helpers for IV -----------------------------------------------------------
+    # --- High-Performance Black-Scholes and Newton-Raphson Solver ---
     def _bs_price(self, right: OptionRight, S: float, K: float, T: float, r: float, sigma: float) -> float:
-        if sigma <= 0 or T <= 0 or S <= 0 or K <= 0:
+        if sigma <= 0.0 or T <= 0.0 or S <= 0.0 or K <= 0.0:
             return 0.0
         d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
         d2 = d1 - sigma * math.sqrt(T)
         if right == OptionRight.Call:
-            return S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
+            return S * _norm_cdf(d1) - K * math.exp(-r * T) * _norm_cdf(d2)
         else:
-            # Put
-            return K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+            return K * math.exp(-r * T) * _norm_cdf(-d2) - S * _norm_cdf(-d1)
 
     def _vega(self, S: float, K: float, T: float, r: float, sigma: float) -> float:
-        if sigma <= 0 or T <= 0 or S <= 0 or K <= 0:
+        if sigma <= 0.0 or T <= 0.0 or S <= 0.0 or K <= 0.0:
             return 0.0
         d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
-        return S * norm.pdf(d1) * math.sqrt(T)
+        return S * _norm_pdf(d1) * math.sqrt(T)
 
-    def _implied_volatility_newton(self, right: OptionRight, S: float, K: float, T: float, r: float,
-                                   market_price: float) -> Optional[float]:
-        # Guard: intrinsic bound
+    @monitor_execution
+    def _implied_volatility_newton(self, right: OptionRight, S: float, K: float, T: float, r: float, market_price: float) -> Optional[float]:
+        """Fast Newton-Raphson IV solver using pure math.erf standard normal CDF."""
         if right == OptionRight.Call:
             intrinsic = max(S - K * math.exp(-r * T), 0.0)
         else:
@@ -1042,15 +1220,15 @@ class EarningsVolatilityCrunch(QCAlgorithm):
             return None
 
         sigma = 0.25
-        for _ in range(100):
+        for _ in range(20):
             price = self._bs_price(right, S, K, T, r, sigma)
             v = self._vega(S, K, T, r, sigma)
             if v < 1e-8:
                 return None
             diff = price - market_price
-            if abs(diff) < 1e-5:
+            if abs(diff) < 1e-4:
                 return sigma
             sigma -= diff / v
-            if sigma <= 0 or sigma > 6:  # basic clamps
+            if sigma <= 0.0 or sigma > 6.0:
                 return None
         return None

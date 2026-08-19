@@ -1,0 +1,7 @@
+gcp_project_id      = "bav-personal-cloud"
+gcp_region          = "europe-west1"
+bigquery_dataset_id = "develop"
+qc_login_api_key    = "e9976a652350e58267cae49c0125e0e76e6a3fd712ef327ef4f3ee44742a45d3"
+qc_user_id          = "116616"
+qc_project_id       = "22447448"
+cron_schedule       = "*/5 * * * *"

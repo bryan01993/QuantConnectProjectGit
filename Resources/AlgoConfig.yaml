@@ -9,7 +9,7 @@ ALGOS:
     ALGO_NAME: "AlgoTester"
     ALGO_MAYUS_LETTERS: "AT"
     ALGO_PUBLIC_NAME: "GeorgeWashington"
-    ALGO_VERSION: 1
+    ALGO_VERSION: "1.0"
     ALGO_PARAMETRY:
       - ALGO_PARAM_1: 0
       - ALGO_PARAM_2: "full"
@@ -20,7 +20,7 @@ ALGOS:
     ALGO_NAME: "StatisticalArbitrageOptionsPair"
     ALGO_MAYUS_LETTERS: "SAOP"
     ALGO_PUBLIC_NAME: "BarackObama"
-    ALGO_VERSION: 2
+    ALGO_VERSION: "2.0"
     ALGO_PARAMETRY:
       - ALGO_PARAM_1:
           ALGO_PARAM_1_DEFAULT: 15
@@ -35,7 +35,7 @@ ALGOS:
     ALGO_NAME: "BuyAndHoldOptions"
     ALGO_MAYUS_LETTERS: "BAHO"
     ALGO_PUBLIC_NAME: "DonaldTrump"
-    ALGO_VERSION: 1
+    ALGO_VERSION: "1.0"
     ALGO_PARAMETRY:
       - ALGO_PARAM_1:
           ALGO_PARAM_1_DEFAULT: 15
@@ -50,7 +50,7 @@ ALGOS:
     ALGO_NAME: "CrossSectionalImpliedVolatilityMeanReversion"
     ALGO_MAYUS_LETTERS: "CSIVMR"
     ALGO_PUBLIC_NAME: "JFKennedy"
-    ALGO_VERSION: 2
+    ALGO_VERSION: "2.0"
     ALGO_PARAMETRY:
       - ALGO_PARAM_1:
           ALGO_PARAM_1_DEFAULT: 15
@@ -64,7 +64,7 @@ ALGOS:
     ALGO_NAME: "EarningsVolatilityCrunch"
     ALGO_MAYUS_LETTERS: "EVC"
     ALGO_PUBLIC_NAME: "Roosevelt"
-    ALGO_VERSION: 1
+    ALGO_VERSION: "1.0"
     ALGO_PARAMETRY:
       - ALGO_PARAM_1:
           ALGO_PARAM_1_DEFAULT: 15
@@ -78,7 +78,7 @@ ALGOS:
     ALGO_NAME: "EarningsVolatilityRamp"
     ALGO_MAYUS_LETTERS: "EVR"
     ALGO_PUBLIC_NAME: "Clinton"
-    ALGO_VERSION: 1
+    ALGO_VERSION: "1.0"
     ALGO_PARAMETRY:
       - ALGO_PARAM_1:
           ALGO_PARAM_1_DEFAULT: 15

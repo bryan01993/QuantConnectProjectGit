@@ -1,101 +1,236 @@
 # region imports
+import sys
+import os
+import random
+import datetime as dt
+
+# Ensure Library/PropietaryCode is resolvable in local LEAN Docker container environments
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_WORKSPACE_DIR = os.path.abspath(os.path.join(_THIS_DIR, ".."))
+_LIBRARY_DIR = os.path.join(_WORKSPACE_DIR, "Library")
+
+for path_dir in [_WORKSPACE_DIR, _LIBRARY_DIR, _THIS_DIR]:
+    if path_dir not in sys.path:
+        sys.path.insert(0, path_dir)
+
 from AlgorithmImports import *
-from PropietaryCode.decorators import monitor_execution
-from datetime import timedelta, datetime
-
-
+from PropietaryCode import (
+    log_trade_entry,
+    log_trade_exit,
+    monitor_execution,
+    measure_memory_usage
+)
 # endregion
 
+
 class AlgoTester(QCAlgorithm):
+    """
+    0AT — Fire-Ring Decorator & Logging Stress Test Algorithm
+    
+    Purpose:
+      Simulates randomized trading strategies with arbitrary dynamic indicators
+      (RSI, Z-Score, Momentum, Volatility, Moving Avg Ratio) to stress-test:
+        1. @log_trade_entry and @log_trade_exit decorators across multiple exit reasons.
+        2. @monitor_execution timing and process memory tracking without backtest failures.
+        3. Standardized [BIGQUERY_TRADE_RECORD] emission with low/zero 'Other' categories.
+    """
+
     def Initialize(self):
-
-        self.SetStartDate(*map(int, self.GetParameter("exec.start_date").split('-')))  # Set a fixed start date
-        self.SetEndDate(*map(int, self.GetParameter("exec.end_date").split('-')))  # Set a fixed end date
+        self.SetStartDate(*map(int, self.GetParameter("exec.start_date").split('-')))
+        self.SetEndDate(*map(int, self.GetParameter("exec.end_date").split('-')))
+        
         initial_amount = self.GetParameter("exec.initial_amount")
-        if not initial_amount:
-            self.Debug("initial amount is not retrieved")
-        self.Debug(f"initial_amount = {initial_amount} with type {type(initial_amount)}")
-        self.SetCash(initial_amount)  # Set initial cash
+        initial_cash = float(initial_amount) if initial_amount else 100000.0
+        self.SetCash(initial_cash)
 
+        # Standard algorithm metadata required by logging decorators
+        self.algo_code = "0AT"
+        self.backtest_run_id = f"0AT_{self.Time.strftime('%Y%m%d_%H%M%S')}_FIRERING"
+
+        # Asset subscriptions
         self.spy = self.AddEquity("SPY", Resolution.Daily).Symbol
-        self.option = self.AddOption("SPY", Resolution.Daily)
-        self.option.SetFilter(self.OptionFilter)
-
-        parameter_test = self.GetParameter("sector")
-        environment_test = self.GetParameter("env")
-        universe_coarse_size_test = self.GetParameter("univ.coarse.size")
+        self.qqq = self.AddEquity("QQQ", Resolution.Daily).Symbol
+        self.symbols = [self.spy, self.qqq]
 
         self.SetBenchmark("SPY")
 
-        # --- Adding Charts ---
-        spy_price_chart = Chart("SPY Price")
-        spy_price_chart.AddSeries(Series("Price", SeriesType.Line, 0))
-        self.AddChart(spy_price_chart)
+        # Track active positions & custom indicators
+        self.active_test_positions = {}
 
-        portfolio_chart = Chart("Portfolio Value")
-        portfolio_chart.AddSeries(Series("Equity", SeriesType.Line, 0))
-        self.AddChart(portfolio_chart)
+        # Schedule periodic trade evaluations every trading day at 10:00 AM
+        self.Schedule.On(
+            self.DateRules.EveryDay("SPY"),
+            self.TimeRules.AfterMarketOpen("SPY", 30),
+            self.RunFireRingCycle
+        )
 
-        option_trades_chart = Chart("Option Trades")
-        option_trades_chart.AddSeries(Series("Options Bought", SeriesType.Bar, 0))
-        self.AddChart(option_trades_chart)
+        self.Log(f"[{self.Time}] 0AT Fire-Ring Test Algorithm Initialized. RunID={self.backtest_run_id}")
 
-        self.Log(f"{parameter_test} in sector, and {environment_test} in env")
-        self.Log(
-            f"{universe_coarse_size_test} in universe_coarse_size_test, and data type {type(universe_coarse_size_test)}.")
-
-        self.next_option_trade = self.Time.replace(day=1)  # Track next option trade day
-        self.option_position = None
-
-        self.Schedule.On(self.DateRules.EveryDay(self.spy), self.TimeRules.At(9, 31), self.CheckOptionExpiration)
-
-    def OnData(self, data):
-        if self.spy in data and data[self.spy] is not None and data[self.spy].Close is not None:
-            if not self.Portfolio[self.spy].Invested:
-                self.MarketOrder(self.spy, int(1000 / data[self.spy].Close))
-
-            # --- Plot SPY Price ---
-            self.Plot("SPY Price", "Price", data[self.spy].Close)
-
-        # --- Plot Portfolio Value ---
+    @monitor_execution
+    def OnData(self, data: Slice):
+        """Monitors daily data slice and logs execution stats."""
+        # Plot portfolio value safely
         self.Plot("Portfolio Value", "Equity", self.Portfolio.TotalPortfolioValue)
 
-        # Buy call option at the beginning of each month
-        if self.Time >= self.next_option_trade:
-            self.TradeOptions(data)
-            self.next_option_trade = self.Time + timedelta(weeks=4)  # Next trade in 1 month
+    @monitor_execution
+    def RunFireRingCycle(self):
+        """
+        Daily execution engine:
+          1. Evaluates random dynamic indicators against dynamic thresholds.
+          2. Opens positions for uninvested assets via @log_trade_entry.
+          3. Evaluates open positions and liquidates via @log_trade_exit with explicit exit tags.
+        """
+        for symbol in self.symbols:
+            symbol_str = symbol.Value
+
+            # If already invested, evaluate for random exit condition
+            if self.Portfolio[symbol].Invested and symbol_str in self.active_test_positions:
+                self.EvaluateAndExitPosition(symbol)
+            elif not self.Portfolio[symbol].Invested:
+                # Evaluate entry condition with random dynamic indicators
+                self.EvaluateAndEnterPosition(symbol)
 
     @monitor_execution
-    def OptionFilter(self, universe):
-        return universe.Strikes(0, 5).Expiration(0, 31).CallsOnly()
+    def GenerateRandomIndicators(self) -> dict:
+        """
+        Generates arbitrary dynamic indicators and random thresholds.
+        Does NOT rely on 4EVC-specific metrics (vol_ratio, slope, ivrv_ratio).
+        """
+        return {
+            "rsi": round(random.uniform(20.0, 80.0), 2),
+            "zscore": round(random.uniform(-3.0, 3.0), 3),
+            "momentum_pct": round(random.uniform(-0.08, 0.08), 4),
+            "moving_avg_ratio": round(random.uniform(0.92, 1.08), 4),
+            "signal_strength": round(random.uniform(0.1, 1.0), 3),
+            "volatility_ann": round(random.uniform(0.10, 0.45), 3),
+            "random_threshold": round(random.uniform(0.40, 0.70), 3)
+        }
 
     @monitor_execution
-    def TradeOptions(self, data):
-        if self.option_position and self.Portfolio[self.option_position].Invested:
-            return
-
-        chain = self.CurrentSlice.OptionChains.get(self.option.Symbol, None)
-        if not chain:
-            return
-
-        contracts = sorted(chain, key=lambda x: x.Expiry)
-        if not contracts:
-            return
-
-        contract = contracts[0]
-        self.option_position = contract.Symbol
-        self.MarketOrder(contract.Symbol, 1)
-        # --- Plot when options are bought ---
-        self.Plot("Option Trades", "Options Bought", 1)
+    @log_trade_entry
+    def ExecuteTradeEntry(self, underlying: Symbol, front: Symbol, back: Symbol, qty: int, metrics: dict):
+        """
+        Decorated trade entry handler.
+        Submits market order and logs [BIGQUERY_TRADE_RECORD] OPEN record.
+        """
+        price = self.Securities[underlying].Price
+        if price <= 0:
+            price = 100.0
+            
+        self.last_entry_price = float(price)
+        
+        # Save position tracking details
+        self.active_test_positions[underlying.Value] = {
+            "entry_time": self.Time,
+            "entry_price": self.last_entry_price,
+            "metrics": metrics,
+            "qty": qty
+        }
+        
+        self.MarketOrder(underlying, qty)
+        self.Log(f"[{self.Time}] 0AT OPEN trade on {underlying.Value} at ${self.last_entry_price:.2f}. Metrics={metrics}")
 
     @monitor_execution
-    def CheckOptionExpiration(self):
-        if not self.option_position:
-            return
+    @log_trade_exit
+    def LiquidateTestPosition(self, underlying: Symbol, tag: str):
+        """
+        Decorated trade liquidation handler.
+        Offsetting order that liquidates position with explicit exit tags.
+        """
+        price = self.Securities[underlying].Price
+        pos_data = self.active_test_positions.get(underlying.Value, {})
+        entry_price = pos_data.get("entry_price", price)
 
-        contract = self.option_position
-        if contract in self.Portfolio and self.Portfolio[contract].Invested:
-            expiry = contract.ID.Date
-            expiry_datetime = datetime(expiry.year, expiry.month, expiry.day)
-            if (expiry_datetime - self.Time).days <= 3:
-                self.Liquidate(contract)
+        self.last_exit_price = float(price)
+        if entry_price > 0:
+            self.last_pnl = (self.last_exit_price - entry_price) / entry_price
+        else:
+            self.last_pnl = 0.0
+
+        self.Liquidate(underlying, tag=tag)
+        
+        if underlying.Value in self.active_test_positions:
+            del self.active_test_positions[underlying.Value]
+            
+        self.Log(f"[{self.Time}] 0AT CLOSE trade on {underlying.Value} at ${self.last_exit_price:.2f}. Tag='{tag}' | PnL={self.last_pnl*100:.2f}%")
+
+    def EvaluateAndEnterPosition(self, symbol: Symbol):
+        """Evaluates random dynamic indicators against thresholds to open position."""
+        indicators = self.GenerateRandomIndicators()
+        threshold = indicators["random_threshold"]
+
+        # Signal trigger condition
+        if indicators["signal_strength"] > (threshold * 0.5):
+            qty = random.randint(10, 50)
+            self.ExecuteTradeEntry(symbol, symbol, None, qty, indicators)
+
+    def EvaluateAndExitPosition(self, symbol: Symbol):
+        """
+        Evaluates position and liquidates under explicit, descriptive exit reasons
+        to guarantee low/zero 'Other' classification in BigQuery.
+        """
+        pos_data = self.active_test_positions.get(symbol.Value, {})
+        entry_time = pos_data.get("entry_time", self.Time)
+        holding_days = (self.Time - entry_time).days
+
+        current_price = self.Securities[symbol].Price
+        entry_price = pos_data.get("entry_price", current_price)
+        
+        if entry_price > 0:
+            unrealized_return = (current_price - entry_price) / entry_price
+        else:
+            unrealized_return = 0.0
+
+        # Deterministic exit scenario selection to test all categories
+        rand_roll = random.random()
+
+        if unrealized_return <= -0.03 or rand_roll < 0.15:
+            tag = f"Stop Loss Triggered ({unrealized_return*100:.2f}% loss threshold crossed)"
+            self.LiquidateTestPosition(symbol, tag)
+            
+        elif unrealized_return >= 0.05 or rand_roll < 0.30:
+            tag = f"Take Profit Target Achieved ({unrealized_return*100:.2f}% profit gain reached)"
+            self.LiquidateTestPosition(symbol, tag)
+            
+        elif holding_days >= 14 or rand_roll < 0.45:
+            tag = f"Time-Based Exit (Holding period limit of {holding_days} days reached)"
+            self.LiquidateTestPosition(symbol, tag)
+            
+        elif rand_roll < 0.70:
+            tag = f"Signal Reversion (Dynamic indicator crossed threshold {rand_roll:.2f})"
+            self.LiquidateTestPosition(symbol, tag)
+            
+        elif rand_roll < 0.80:
+            tag = f"Risk Margin Reduction (Portfolio risk allocation cap)"
+            self.LiquidateTestPosition(symbol, tag)
+            
+        elif rand_roll < 0.88:
+            tag = f"DTE Safety Expiry Close"
+            self.LiquidateTestPosition(symbol, tag)
+
+        elif rand_roll < 0.94:
+            tag = f"Option Assignment (Assigned stock liquidation post-ITM exercise)"
+            self.LiquidateTestPosition(symbol, tag)
+
+        elif rand_roll < 1.00:
+            tag = f"Margin Call Warning: Force Liquidation Order"
+            self.LiquidateTestPosition(symbol, tag)
+
+    def OnAssignment(self, assignmentEvent: Any) -> None:
+        """
+        QuantConnect event triggered upon ITM option assignment.
+        Liquidates assigned underlying stock immediately to prevent unwanted equity exposure.
+        """
+        symbol = getattr(assignmentEvent, "Symbol", None)
+        if symbol:
+            underlying = getattr(symbol, "Underlying", symbol)
+            self.Log(f"[{self.Time}] OPTION ASSIGNED on {symbol.Value}. Liquidating assigned stock...")
+            if hasattr(self, "LiquidateTestPosition"):
+                self.LiquidateTestPosition(underlying, f"Option Assignment (Post-ITM Exercise of {symbol.Value})")
+
+    def OnFrameworkEnd(self) -> None:
+        """
+        QuantConnect event triggered when backtest execution completes.
+        Saves all accumulated trade records into self.ObjectStore.
+        """
+        save_trade_buffer_to_object_store(self)

@@ -16,7 +16,7 @@ class EarningsVolatilityRamp(QCAlgorithm):
         self.debug("DEBUG: Entering initialize")
         # Locally Lean installs free sample data, to download more data please visit https://www.quantconnect.com/docs/v2/lean-cli/datasets/downloading-data
         self.set_start_date(2010, 1, 1) 
-        self.set_end_date(2012, 1, 1)
+        self.set_end_date(2026, 1, 1)
         self.set_cash(1000000000000) 
         
         # Ensure resolution is DAILY as requested
@@ -595,3 +595,4 @@ class EarningsVolatilityRamp(QCAlgorithm):
 #4. Open a straddle on each of the stocks that exist in point 2. but attaching in the ticket a single ID and all the attributes from point 3.
 #5. Monitor to close the position the day before the earnings announcement.
 #6. 
+

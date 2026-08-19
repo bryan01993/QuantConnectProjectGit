@@ -959,3 +959,4 @@ class EarningsVolatilityCrunch(QCAlgorithm):
             if sigma <= 0 or sigma > 6:  # basic clamps
                 return None
         return None
+

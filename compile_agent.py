@@ -6,53 +6,21 @@ Lean infrastructure. Instead, it focuses on checking that the Python file
 is syntactically correct and can be compiled to byte‑code. This serves as
 a preflight check before submitting code to the QuantConnect platform.
 
-Functions
----------
-compile_quantconnect_algorithm(file_path: str) -> bool
-    Try to compile the algorithm located at ``file_path``. Return ``True``
-    if the compilation succeeds, ``False`` otherwise.
-
-Notes
------
-The function uses the built‑in ``ast`` and ``py_compile`` modules to
-perform a basic compilation. It first parses the source code into an
-abstract syntax tree (AST) and then attempts to compile it into
-byte‑code. If either step raises a ``SyntaxError`` or a
-``py_compile.PyCompileError``, the function returns ``False``. Any other
-unexpected exception also results in a ``False`` return value. This
-behavior ensures that the caller receives a boolean result without the
-need to catch exceptions.
-
-Example
--------
->>> result = compile_quantconnect_algorithm('path/to/algorithm.py')
->>> if result:
-...     print("Algorithm compiled successfully!")
-... else:
-...     print("Compilation failed.")
-
+CLI Usage:
+    poetry run python compile_agent.py <path/to/algorithm.py>
 """
 
 from __future__ import annotations
 
 import ast
 import py_compile
-from typing import Optional
+import sys
+import traceback
+from typing import Optional, Tuple
 
 
-def compile_quantconnect_algorithm(file_path: str) -> bool:
+def compile_quantconnect_algorithm(file_path: str) -> Tuple[bool, Optional[str]]:
     """Attempt to compile a QuantConnect algorithm located at ``file_path``.
-
-    This function performs a two‑step compilation process:
-
-    1. It uses ``ast.parse`` to ensure the source code is syntactically
-       valid Python. This step does not execute the code and therefore
-       doesn't require any external dependencies that the algorithm might
-       import (e.g., QuantConnect's ``QCAlgorithm`` or ``AlgorithmImports``).
-    2. It calls ``py_compile.compile`` with ``doraise=True`` to produce
-       byte‑code. If the code is syntactically correct, this step will
-       succeed regardless of missing imports because Python compiles
-       modules lazily.
 
     Parameters
     ----------
@@ -61,39 +29,50 @@ def compile_quantconnect_algorithm(file_path: str) -> bool:
 
     Returns
     -------
-    bool
-        ``True`` if the file compiles successfully, ``False`` otherwise.
-
-    Notes
-    -----
-    This function does not catch or report specific error messages. It is
-    intended to be a simple yes/no check. For detailed error reporting,
-    callers should wrap this function and capture exceptions explicitly.
+    Tuple[bool, Optional[str]]
+        A tuple of (success_boolean, error_message_or_traceback).
+        If compilation succeeds: (True, None).
+        If compilation fails: (False, error_details_string).
     """
-
     try:
-        # Read the entire source file. Using UTF‑8 ensures that most files
-        # containing non‑ASCII characters are handled correctly.
         with open(file_path, "r", encoding="utf-8") as source_file:
             source_code = source_file.read()
 
-        # Parse the source code into an abstract syntax tree. This will
-        # raise ``SyntaxError`` for invalid Python syntax.
-        ast.parse(source_code)
+        # Step 1: Parse AST to catch syntax errors
+        ast.parse(source_code, filename=file_path)
 
-        # Attempt to compile the file into byte‑code. The ``doraise=True``
-        # flag instructs ``py_compile`` to raise an exception rather than
-        # writing the compiled file. This avoids side effects on disk.
+        # Step 2: Compile to byte-code to verify syntax completeness
         py_compile.compile(file_path, doraise=True)
 
-        # If both steps succeed, return True.
-        return True
+        return True, None
 
-    except (SyntaxError, py_compile.PyCompileError):
-        # A syntax error or compilation error occurred. Return False to
-        # indicate failure.
-        return False
-    except Exception:
-        # Catch any other unexpected exception and treat it as a failure.
-        # In a production system, logging could be added here.
-        return False
+    except SyntaxError as syn_err:
+        err_msg = (
+            f"[SYNTAX ERROR] Compilation failed for '{file_path}':\n"
+            f"  File '{syn_err.filename}', line {syn_err.lineno}, col {syn_err.offset}\n"
+            f"    {syn_err.text.strip() if syn_err.text else ''}\n"
+            f"  SyntaxError: {syn_err.msg}"
+        )
+        return False, err_msg
+    except py_compile.PyCompileError as comp_err:
+        err_msg = f"[COMPILE ERROR] PyCompile failed for '{file_path}': {comp_err}"
+        return False, err_msg
+    except Exception as exc:
+        err_msg = f"[ERROR] Unexpected compilation error for '{file_path}': {exc}\n{traceback.format_exc()}"
+        return False, err_msg
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("[USAGE] poetry run python compile_agent.py <target_file.py>")
+        sys.exit(2)
+
+    target_path = sys.argv[1]
+    success, error_details = compile_quantconnect_algorithm(target_path)
+
+    if success:
+        print(f"[OK] Compiled successfully: {target_path}")
+        sys.exit(0)
+    else:
+        print(error_details, file=sys.stderr)
+        sys.exit(1)

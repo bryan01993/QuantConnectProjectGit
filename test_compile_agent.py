@@ -15,8 +15,6 @@ import tempfile
 import textwrap
 from typing import Tuple
 
-import pytest
-
 from compile_agent import compile_quantconnect_algorithm
 
 
@@ -44,45 +42,54 @@ def _create_temp_file(contents: str) -> Tuple[str, str]:
     return path, name
 
 
-def test_compile_valid_algorithm() -> None:
-    """Test that a syntactically valid Python file compiles successfully."""
-    # A minimal valid algorithm. The import is non‑existent in this test
-    # environment, but that is acceptable because compilation does not
-    # require imports to resolve when using ``py_compile``.
-    code = textwrap.dedent(
-        """
-        from AlgorithmImports import *  # pretend QuantConnect import
+import unittest
 
-        class DummyAlgorithm:
-            def __init__(self):
-                self.value = 42
-
-            def run(self):
-                return self.value
-        """
-    )
-    path, name = _create_temp_file(code)
-
-    try:
-        result = compile_quantconnect_algorithm(path)
-        assert result is True, f"Expected compilation to succeed for {name}"
-    finally:
-        os.remove(path)
+from compile_agent import compile_quantconnect_algorithm
 
 
-def test_compile_invalid_algorithm() -> None:
-    """Test that an invalid Python file is reported as failing compilation."""
-    # This file has a syntax error: missing colon after function name.
-    code = textwrap.dedent(
-        """
-        def broken_function()
-            return None
-        """
-    )
-    path, name = _create_temp_file(code)
+class TestCompileAgent(unittest.TestCase):
 
-    try:
-        result = compile_quantconnect_algorithm(path)
-        assert result is False, f"Expected compilation to fail for {name}"
-    finally:
-        os.remove(path)
+    def test_compile_valid_algorithm(self):
+        """Test that a syntactically valid Python file compiles successfully."""
+        code = textwrap.dedent(
+            """
+            from AlgorithmImports import *
+
+            class DummyAlgorithm:
+                def __init__(self):
+                    self.value = 42
+
+                def run(self):
+                    return self.value
+            """
+        )
+        path, name = _create_temp_file(code)
+
+        try:
+            success, err = compile_quantconnect_algorithm(path)
+            self.assertTrue(success, f"Expected compilation to succeed for {name}")
+            self.assertIsNone(err)
+        finally:
+            os.remove(path)
+
+    def test_compile_invalid_algorithm(self):
+        """Test that an invalid Python file is reported as failing compilation."""
+        code = textwrap.dedent(
+            """
+            def broken_function()
+                return None
+            """
+        )
+        path, name = _create_temp_file(code)
+
+        try:
+            success, err = compile_quantconnect_algorithm(path)
+            self.assertFalse(success, f"Expected compilation to fail for {name}")
+            self.assertIsNotNone(err)
+            self.assertIn("SYNTAX ERROR", err)
+        finally:
+            os.remove(path)
+
+
+if __name__ == "__main__":
+    unittest.main()
