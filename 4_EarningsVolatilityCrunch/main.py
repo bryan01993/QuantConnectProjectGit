@@ -664,7 +664,7 @@ class EarningsVolatilityCrunch(QCAlgorithm):
         for k in expired_keys:
             self.earnings_calendar.pop(k, None)
 
-        # Evict cache entries older than 5 days to prevent monotonic memory leaks
+        # Evict cache entries older than 5 days to prevent monotonic memory leaks (M-02)
         cutoff = today - timedelta(days=5)
         stale_metrics = [k for k in list(self._metrics_cache.keys()) if k[1] < cutoff]
         for k in stale_metrics:
@@ -673,6 +673,31 @@ class EarningsVolatilityCrunch(QCAlgorithm):
         stale_chains = [k for k in list(self._option_chain_cache.keys()) if k[1] < cutoff]
         for k in stale_chains:
             self._option_chain_cache.pop(k, None)
+
+        # Sweep unneeded option subscriptions from LEAN engine RAM (M-01)
+        active_contracts = set()
+        for pos in self.active_spreads.values():
+            if isinstance(pos, dict):
+                for k in ("front", "back"):
+                    if k in pos and pos[k]:
+                        active_contracts.add(pos[k])
+        for p in self._pending_entry_tickets.values():
+            if isinstance(p, dict):
+                for k in ("front", "back"):
+                    if k in p and p[k]:
+                        active_contracts.add(p[k])
+        for p in self._pending_exit_tickets.values():
+            if isinstance(p, dict):
+                for k in ("front", "back"):
+                    if k in p and p[k]:
+                        active_contracts.add(p[k])
+
+        stale_options = [
+            sym for sym in list(self._subscribed_options)
+            if sym not in active_contracts and (not self.Portfolio.ContainsKey(sym) or not self.Portfolio[sym].Invested)
+        ]
+        for sym in stale_options:
+            self.UnsubscribeOption(sym)
 
     def RegisterFinalLiquidation(self, anchor_ticker: str = "SPY", minutes_before_close: int = 120) -> None:
         try:

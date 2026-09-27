@@ -74,6 +74,9 @@ class CalendarSpreadAlphaModel(AlphaModel):
                     if days_to_earnings > 1:
                         continue
 
+            if self.algo.IsAlreadyInvested(underlying):
+                continue
+
             metrics = self.algo.GetUnderlyingMetricsCached(underlying, report_date)
             if metrics is None:
                 continue
@@ -89,6 +92,11 @@ class CalendarSpreadAlphaModel(AlphaModel):
             pairs = self.algo.MatchOptionContracts(contracts)
             if not pairs:
                 continue
+
+            underlying_price = self.algo.GetUnderlyingPrice(underlying)
+            if underlying_price > 0 and len(pairs) > 2:
+                pairs.sort(key=lambda p: abs(float(p[0].ID.StrikePrice) - underlying_price))
+                pairs = pairs[:2]
 
             call_candidates = []
             put_candidates = []
