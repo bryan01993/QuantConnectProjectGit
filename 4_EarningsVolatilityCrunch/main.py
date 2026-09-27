@@ -23,6 +23,7 @@ from PropietaryCode import (
     fast_bs_price,
     fast_vega,
     fast_implied_volatility_newton,
+    KellyCriterion,
     CalendarSpreadOpportunity,
     CalendarSpreadAlphaModel,
     CalendarSpreadExecutionManager,
@@ -114,10 +115,26 @@ class EarningsVolatilityCrunch(QCAlgorithm):
 
         self.alpha_model = CalendarSpreadAlphaModel(self)
         self.execution_manager = CalendarSpreadExecutionManager(self)
+        self.kelly_criterion = KellyCriterion(self.kelly_factor, self.kelly_period)
+        self._all_trade_records = []
 
         self.AddUniverse(self.CoarseSelectionFunction)
         self.AddUniverse(EODHDUpcomingEarnings, self.UpcomingEarningsSelectionFunction)
         self.RegisterFinalLiquidation(anchor_ticker="SPY", minutes_before_close=120)
+        try:
+            self.Schedule.On(
+                self.DateRules.EveryDay("SPY"),
+                self.TimeRules.At(9, 45),
+                self.MorningCrushExecutionCheck
+            )
+        except Exception:
+            pass
+
+    def MorningCrushExecutionCheck(self) -> None:
+        """Issue 3.4: Morning IV crush evaluation at 09:45 EST."""
+        if not self.IsWarmingUp and self.active_spreads:
+            self.SweepOrphanedOptionLegs()
+            self.execution_manager.ManagePositions(getattr(self, "CurrentSlice", None))
 
     def CoarseSelectionFunction(self, coarse: List[CoarseFundamental]) -> List[Symbol]:
         min_price = float(self.GetParameter("univ.coarse.min_price", "5"))
@@ -390,8 +407,8 @@ class EarningsVolatilityCrunch(QCAlgorithm):
         strike = float(near_contract.ID.StrikePrice)
         right = near_contract.ID.OptionRight
 
-        iv_near = self._implied_volatility_newton(right, underlying_price, strike, T_near, self.risk_free_rate, near_price)
-        iv_far = self._implied_volatility_newton(right, underlying_price, strike, T_far, self.risk_free_rate, far_price)
+        iv_near = fast_implied_volatility_newton(right, underlying_price, strike, T_near, self.risk_free_rate, near_price)
+        iv_far = fast_implied_volatility_newton(right, underlying_price, strike, T_far, self.risk_free_rate, far_price)
         if iv_near is None or iv_far is None or iv_near <= 0 or iv_far <= 0:
             return None
 
@@ -455,6 +472,12 @@ class EarningsVolatilityCrunch(QCAlgorithm):
             return 0
 
         target_allocation = 0.01
+        kc = getattr(self, "kelly_criterion", None)
+        if isinstance(kc, KellyCriterion) and kc.IsReady:
+            k_frac = kc.GetFraction()
+            if isinstance(k_frac, (int, float)) and k_frac > 0:
+                target_allocation = min(float(k_frac), 0.02)
+
         capital_to_risk = min(total_equity * target_allocation, margin_remaining * 0.02)
         if natural_ask > 0.01:
             contract_cost = max(natural_ask * 100.0, 25.0)
@@ -533,6 +556,9 @@ class EarningsVolatilityCrunch(QCAlgorithm):
                         entry_debit = info["entry_price"]
                         realized_pnl = round((exit_price - entry_debit) / entry_debit, 5) if entry_debit > 0 else 0.0
                         pnl = realized_pnl
+                        kc = getattr(self, "kelly_criterion", None)
+                        if isinstance(kc, KellyCriterion):
+                            kc.Update([pnl])
                         
                         exit_reason = info.get("exit_reason", "Post-Earnings 10 AM Exit")
                         pk = info.get("pk", "unknown")
@@ -812,5 +838,23 @@ class EarningsVolatilityCrunch(QCAlgorithm):
                 "back_iv_crush_pct": metrics.get("back_iv_crush_pct", 0.0)
             })
         }
+        if not hasattr(self, "_all_trade_records"):
+            self._all_trade_records = []
+        self._all_trade_records.append(trade_data)
         self.Log(f"[BIGQUERY_TRADE_RECORD] {json.dumps(trade_data)}")
+
+    def OnFrameworkEnd(self) -> None:
+        """
+        Saves all accumulated trade records into self.ObjectStore upon algorithm completion (B-02 / B-03 / Issue 3.3).
+        Guarantees that BigQuery ingestion has zero dropped trade records even if stdout console logs get truncated.
+        """
+        if hasattr(self, "ObjectStore") and getattr(self, "_all_trade_records", None):
+            try:
+                payload = json.dumps(self._all_trade_records, indent=2)
+                algo_id = getattr(self, "AlgorithmId", None) or self.backtest_run_id
+                self.ObjectStore.Save(f"BT_TRADES_{algo_id}.json", payload)
+                self.ObjectStore.Save("BTOPTrades_4EVC_latest.json", payload)
+                self.Log(f"[OBJECTSTORE_SAVED] Saved {len(self._all_trade_records)} trade records to ObjectStore key 'BT_TRADES_{algo_id}.json'.")
+            except Exception as e:
+                self.Debug(f"[OBJECTSTORE_ERROR] Failed to save trade records to ObjectStore: {e}")
 

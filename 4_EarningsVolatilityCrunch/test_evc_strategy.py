@@ -262,6 +262,75 @@ def test_orphan_sweeper_short_and_long():
     assert (long_sec.Symbol, -3) in [(c[0], c[1]) for c in calls]
     assert (short_sec.Symbol, 2) in [(c[0], c[1]) for c in calls]
 
+def test_kelly_criterion_integration():
+    """Verify Task 2.1: Kelly Criterion adjusts position sizing dynamically when ready."""
+    from PropietaryCode import KellyCriterion
+    algo = EarningsVolatilityCrunch()
+    algo.Portfolio = MagicMock()
+    algo.Portfolio.TotalPortfolioValue = 100000.0
+    algo.Portfolio.MarginRemaining = 100000.0
+
+    kc = KellyCriterion(factor=0.5, period=5)
+    # Feed 5 winning returns to trigger high Kelly fraction
+    kc.Update([0.30, 0.25, 0.20, 0.35, 0.40])
+    algo.kelly_criterion = kc
+
+    metrics = {"underlying_price": 100.0}
+    qty = algo.DeterminePositionSize(MagicMock(), metrics, natural_ask=2.0)
+    # $100k equity * 2% cap = $2000 / ($2.00 * 100) = 10 contracts
+    assert qty == 10
+
+def test_object_store_save():
+    """Verify Issue 3.3: OnFrameworkEnd dumps buffered trade records to ObjectStore."""
+    algo = EarningsVolatilityCrunch()
+    algo.ObjectStore = MagicMock()
+    algo.backtest_run_id = "test_run_123"
+    algo.AlgorithmId = "qc_bt_abc999"
+    algo.Log = MagicMock()
+    algo.Debug = MagicMock()
+
+    # Buffer 2 trade records
+    algo._all_trade_records = [
+        {"pk": "trade_1", "action": "OPEN"},
+        {"pk": "trade_2", "action": "CLOSE"}
+    ]
+
+    algo.OnFrameworkEnd()
+
+    assert algo.ObjectStore.Save.call_count == 2
+    saved_keys = [c[0][0] for c in algo.ObjectStore.Save.call_args_list]
+    assert "BT_TRADES_qc_bt_abc999.json" in saved_keys
+    assert "BTOPTrades_4EVC_latest.json" in saved_keys
+
+def test_strict_holding_period_cap():
+    """Verify Issue 1.5: Strict Day E+1 holding cap triggers liquidation at or after 11:00 AM."""
+    from datetime import date, time
+    from PropietaryCode import CalendarSpreadExecutionManager
+    algo = EarningsVolatilityCrunch()
+    algo.active_spreads = {}
+    algo.Time = datetime(2023, 5, 10, 11, 30)
+    algo.LiquidateSpread = MagicMock()
+
+    spread_key = "test_spread_holding_cap"
+    front_mock = MagicMock()
+    front_mock.ID.Date = datetime(2023, 5, 19)
+    algo.active_spreads[spread_key] = {
+        "underlying": MagicMock(),
+        "front": front_mock,
+        "back": MagicMock(),
+        "qty": 2,
+        "entry_price": 1.50,
+        "entry_time": datetime(2023, 5, 9, 14, 30),  # Entered yesterday
+        "tickets": []
+    }
+    algo.Securities = {}
+
+    exec_mgr = CalendarSpreadExecutionManager(algo)
+    exec_mgr.LiquidateSpread = MagicMock()
+    exec_mgr.ManagePositions(MagicMock())
+
+    exec_mgr.LiquidateSpread.assert_called_with(spread_key, "Strict Holding Period Cap (E+1 Exit)")
+
 if __name__ == "__main__":
     print("Running EVC unit tests...")
     test_bs_price()
@@ -280,5 +349,11 @@ if __name__ == "__main__":
     print("test_unclamped_exit_pnl passed.")
     test_orphan_sweeper_short_and_long()
     print("test_orphan_sweeper_short_and_long passed.")
+    test_kelly_criterion_integration()
+    print("test_kelly_criterion_integration passed.")
+    test_object_store_save()
+    print("test_object_store_save passed.")
+    test_strict_holding_period_cap()
+    print("test_strict_holding_period_cap passed.")
     print("All EVC unit tests passed successfully!")
 

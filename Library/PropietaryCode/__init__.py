@@ -23,6 +23,7 @@ from .calculation_utils.BSMModel import (
     fast_vega,
     fast_implied_volatility_newton,
 )
+from .calculation_utils.risk_management import KellyCriterion
 from .models.alpha_model import CalendarSpreadOpportunity, CalendarSpreadAlphaModel
 from .models.execution_manager import CalendarSpreadExecutionManager
 from . import decorators
@@ -42,6 +43,7 @@ __all__ = [
     "fast_bs_price",
     "fast_vega",
     "fast_implied_volatility_newton",
+    "KellyCriterion",
     "CalendarSpreadOpportunity",
     "CalendarSpreadAlphaModel",
     "CalendarSpreadExecutionManager",

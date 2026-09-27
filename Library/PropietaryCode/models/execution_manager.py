@@ -31,6 +31,7 @@ if "OrderStatus" not in globals():
         New = 0
 
 from .alpha_model import CalendarSpreadOpportunity
+from ..calculation_utils.BSMModel import fast_implied_volatility_newton
 
 
 class CalendarSpreadExecutionManager(ExecutionModel):
@@ -201,8 +202,21 @@ class CalendarSpreadExecutionManager(ExecutionModel):
         back = position["back"]
         qty = position["qty"]
 
-        front_qty = abs(self.algo.Portfolio[front].Quantity) if self.algo.Portfolio.ContainsKey(front) else 0
-        back_qty = abs(self.algo.Portfolio[back].Quantity) if self.algo.Portfolio.ContainsKey(back) else 0
+        def _get_holding_qty(sym: Any) -> int:
+            if not sym or not hasattr(self.algo, "Portfolio") or not hasattr(self.algo.Portfolio, "ContainsKey"):
+                return 0
+            try:
+                if self.algo.Portfolio.ContainsKey(sym):
+                    holding = self.algo.Portfolio[sym]
+                    q = getattr(holding, "Quantity", 0)
+                    if isinstance(q, (int, float)):
+                        return int(abs(q))
+            except Exception:
+                pass
+            return 0
+
+        front_qty = _get_holding_qty(front)
+        back_qty = _get_holding_qty(back)
 
         for t in position.get("tickets", []):
             if t.Status in [OrderStatus.Submitted, OrderStatus.New]:
@@ -357,7 +371,7 @@ class CalendarSpreadExecutionManager(ExecutionModel):
                 if front_price > 0:
                     T_front = max((front.ID.Date - self.algo.Time).total_seconds(), 0.0) / (365.0 * 24 * 3600)
                     if T_front > 0:
-                        cur_front_iv = self.algo._implied_volatility_newton(front.ID.OptionRight, underlying_price, float(front.ID.StrikePrice), T_front, self.algo.risk_free_rate, front_price)
+                        cur_front_iv = fast_implied_volatility_newton(front.ID.OptionRight, underlying_price, float(front.ID.StrikePrice), T_front, self.algo.risk_free_rate, front_price)
                         if cur_front_iv is not None and cur_front_iv > 0:
                             position["front_iv_max"] = max(position.get("front_iv_max", cur_front_iv), cur_front_iv)
                             position["front_iv_min"] = min(position.get("front_iv_min", cur_front_iv), cur_front_iv)
@@ -368,26 +382,31 @@ class CalendarSpreadExecutionManager(ExecutionModel):
                 if back_price > 0:
                     T_back = max((back.ID.Date - self.algo.Time).total_seconds(), 0.0) / (365.0 * 24 * 3600)
                     if T_back > 0:
-                        cur_back_iv = self.algo._implied_volatility_newton(back.ID.OptionRight, underlying_price, float(back.ID.StrikePrice), T_back, self.algo.risk_free_rate, back_price)
+                        cur_back_iv = fast_implied_volatility_newton(back.ID.OptionRight, underlying_price, float(back.ID.StrikePrice), T_back, self.algo.risk_free_rate, back_price)
                         if cur_back_iv is not None and cur_back_iv > 0:
                             position["back_iv_max"] = max(position.get("back_iv_max", cur_back_iv), cur_back_iv)
                             position["back_iv_min"] = min(position.get("back_iv_min", cur_back_iv), cur_back_iv)
                             position["last_back_iv"] = cur_back_iv
 
-            front_expiry = front.ID.Date if front else None
-            if front_expiry:
-                expiry_close = datetime.combine(front_expiry.date(), time(16, 0))
-                hours_to_front_expiry = (expiry_close - self.algo.Time).total_seconds() / 3600.0
-            else:
-                hours_to_front_expiry = 999.0
+            front_expiry = getattr(getattr(front, "ID", None), "Date", None) if front else None
+            hours_to_front_expiry = 999.0
+            if front_expiry and hasattr(front_expiry, "date"):
+                try:
+                    f_d = front_expiry.date() if callable(front_expiry.date) else front_expiry
+                    if isinstance(f_d, date):
+                        expiry_close = datetime.combine(f_d, time(16, 0))
+                        hours_to_front_expiry = (expiry_close - self.algo.Time).total_seconds() / 3600.0
+                except Exception:
+                    hours_to_front_expiry = 999.0
 
             entry_time = position.get("entry_time", self.algo.Time)
             days_held = (self.algo.Time.date() - entry_time.date()).days
 
-            # L-02: Enforce mandatory hard close at least 3 hours before front-leg market close on expiration day
-            if hours_to_front_expiry <= 3.0 or days_held >= 2:
-                self.algo.Log(f"[EXPIRY SAFETY FORCE CLOSE] Closing spread {spread_key} (Hours: {hours_to_front_expiry:.1f}h, Days: {days_held})")
-                self.LiquidateSpread(spread_key, "Expiry Safety Force Close")
+            # L-02 & Issue 1.5: Enforce mandatory hard close at least 3 hours before front-leg market close or Day E+1 holding cap
+            if hours_to_front_expiry <= 3.0 or days_held >= 2 or (days_held >= 1 and self.algo.Time.hour >= 11):
+                reason = "Expiry Safety Force Close" if hours_to_front_expiry <= 3.0 else "Strict Holding Period Cap (E+1 Exit)"
+                self.algo.Log(f"[{reason.upper()}] Closing spread {spread_key} (Hours: {hours_to_front_expiry:.1f}h, Days: {days_held}, Hour: {self.algo.Time.hour})")
+                self.LiquidateSpread(spread_key, reason)
                 continue
 
             # Adaptive limit escalation for pending exits
@@ -395,7 +414,7 @@ class CalendarSpreadExecutionManager(ExecutionModel):
                 liq_start = position.get("liquidation_start_time", self.algo.Time)
                 pending_liq_hours = (self.algo.Time - liq_start).total_seconds() / 3600.0
 
-                if position.get("exit_is_adaptive", False) and pending_liq_hours >= 1.0:
+                if position.get("exit_is_adaptive", False) and pending_liq_hours >= 0.25:
                     nat_credit = position.get("natural_credit", 0.0)
                     if nat_credit >= 0.01:
                         for ticket_id, pos in list(self.algo._pending_exit_tickets.items()):
@@ -410,9 +429,19 @@ class CalendarSpreadExecutionManager(ExecutionModel):
                                         pass
                     position["exit_is_adaptive"] = False
 
-                if pending_liq_hours >= 3.0 or self.algo.Time.hour >= 15:
-                    front_qty = abs(self.algo.Portfolio[front].Quantity) if front and self.algo.Portfolio.ContainsKey(front) else 0
-                    back_qty = abs(self.algo.Portfolio[back].Quantity) if back and self.algo.Portfolio.ContainsKey(back) else 0
+                # Issue 1.5 & 3.4: Strict morning window escalation (after 30m pending or after 11:00 AM)
+                if pending_liq_hours >= 0.5 or self.algo.Time.hour >= 11:
+                    def _get_qty(sym: Any) -> int:
+                        try:
+                            if sym and hasattr(self.algo, "Portfolio") and self.algo.Portfolio.ContainsKey(sym):
+                                q = getattr(self.algo.Portfolio[sym], "Quantity", 0)
+                                if isinstance(q, (int, float)):
+                                    return int(abs(q))
+                        except Exception:
+                            pass
+                        return 0
+                    front_qty = _get_qty(front)
+                    back_qty = _get_qty(back)
                     if front_qty > 0 and back_qty > 0:
                         combo_qty = min(front_qty, back_qty)
                         exit_legs = [Leg.Create(front, 1), Leg.Create(back, -1)]
@@ -422,6 +451,7 @@ class CalendarSpreadExecutionManager(ExecutionModel):
                                     t = self.algo.Transactions.GetOrderTicket(ticket_id)
                                     if t and t.Status in [OrderStatus.Submitted, OrderStatus.New]:
                                         t.Cancel("Canceling pending limit before market close")
+                                    self.algo._pending_exit_tickets.pop(ticket_id, None)
                                 except Exception:
                                     pass
                         self.algo.ComboMarketOrder(exit_legs, combo_qty, tag="CLOSE: Force Market Close Combo")
