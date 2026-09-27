@@ -11,10 +11,12 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 import sys
 import datetime as dt
-from typing import List, Set
+from typing import Any, List, Set
 from google.cloud import bigquery
 
 # Ensure current BigQuery directory is in sys.path for db_operator imports
@@ -393,10 +395,49 @@ def parse_orders_json_file(file_path: str) -> List[dict]:
             else:
                 individual_orders.append(order)
 
+        remaining_individual: list = []
+        entry_cands: dict = {}
+        for o in individual_orders:
+            tag = str(o.get("tag", ""))
+            is_close = tag.startswith("CLOSE:") or "FLATTEN" in tag or '"action":"CLOSE"' in tag or '"action": "CLOSE"' in tag or "exit_reason" in tag
+            if not is_close and "{" in tag and ("SHORT" in tag or "LONG" in tag):
+                raw_sym = o.get("symbol", {})
+                sym_val = str(raw_sym.get("value", "")) if isinstance(raw_sym, dict) else str(raw_sym)
+                u = sym_val.split()[0] if sym_val else "UNKNOWN"
+                key = (u, o.get("time", ""))
+                entry_cands.setdefault(key, []).append(o)
+            else:
+                remaining_individual.append(o)
+
+        synth_id_counter = 0
+        for (u, t), c_orders in entry_cands.items():
+            if len(c_orders) == 2:
+                synth_id_counter += 1
+                combo_legs[f"synth_{synth_id_counter}_{u}"] = c_orders
+            else:
+                remaining_individual.extend(c_orders)
+        individual_orders = remaining_individual
+
+        close_orders: list = []
+
         # ------------------------------------------------------------------ #
         # Pass 2: Emit OPEN records — one per combo group (entry spread)       #
         # ------------------------------------------------------------------ #
         for gom_id, legs in combo_legs.items():
+            tags = [str(l.get("tag", "")) for l in legs]
+            is_close = any(
+                t.startswith("CLOSE:") or "FLATTEN" in t or '"action":"CLOSE"' in t or '"action": "CLOSE"' in t or "exit_reason" in t
+                for t in tags
+            )
+            if not is_close and len(legs) == 2:
+                expiries = [(l.get("symbol", {}).get("value", ""), l.get("quantity", 0)) for l in legs]
+                if (expiries[0][0] < expiries[1][0] and expiries[0][1] > 0) or (expiries[1][0] < expiries[0][0] and expiries[1][1] > 0):
+                    is_close = True
+
+            if is_close:
+                close_orders.extend(legs)
+                continue
+
             # Identify LONG leg (far / back) and SHORT leg (near / front)
             long_leg = next((l for l in legs if l.get("quantity", 0) > 0), None)
             short_leg = next((l for l in legs if l.get("quantity", 0) < 0), None)
@@ -410,19 +451,28 @@ def parse_orders_json_file(file_path: str) -> List[dict]:
             raw_tag = long_leg.get("tag", "")
 
             tag_data: dict = {}
-            if isinstance(raw_tag, str) and raw_tag.startswith("{") and raw_tag.endswith("}"):
-                try:
-                    tag_data = json.loads(raw_tag)
-                except Exception:
-                    tag_data = {}
+            if isinstance(raw_tag, str):
+                m_open = re.search(r'\{.*\}', raw_tag)
+                if m_open:
+                    try:
+                        tag_data = json.loads(m_open.group(0))
+                    except Exception:
+                        tag_data = {}
 
             # Extract underlying from tag JSON key "u"; fallback to symbol value
             underlying = str(tag_data.get("u", long_leg.get("symbol", {}).get("value", "UNKNOWN")))
 
-            # Use groupOrderManager limitPrice as the spread entry price
-            gom = long_leg.get("groupOrderManager", {})
-            entry_price = round(float(gom.get("limitPrice", long_leg.get("price", 0.0))), 5)
-            qty = int(abs(gom.get("quantity", long_leg.get("quantity", 0))))
+            # Use groupOrderManager limitPrice as the spread entry price, or calculate difference of legs
+            gom = long_leg.get("groupOrderManager")
+            if gom and gom.get("limitPrice") is not None:
+                entry_price = round(float(gom["limitPrice"]), 5)
+                qty = int(abs(gom.get("quantity", long_leg.get("quantity", 0))))
+            elif short_leg is not None:
+                entry_price = round(float(long_leg.get("price", 0.0)) - float(short_leg.get("price", 0.0)), 5)
+                qty = int(abs(long_leg.get("quantity", 0)))
+            else:
+                entry_price = round(float(long_leg.get("price", 0.0)), 5)
+                qty = int(abs(long_leg.get("quantity", 0)))
 
             slope_val = float(tag_data["slope"]) if "slope" in tag_data else None
             ivrv_val = float(tag_data.get("ivrv_ratio") or tag_data.get("ivrv") or 0.0) if ("ivrv" in tag_data or "ivrv_ratio" in tag_data) else None
@@ -463,23 +513,30 @@ def parse_orders_json_file(file_path: str) -> List[dict]:
             rows.append(open_record)
 
         # ------------------------------------------------------------------ #
-        # Pass 3: Emit CLOSE records from individual (non-combo) orders        #
+        # Pass 3: Emit CLOSE records from all close orders (combo + individual)#
         # ------------------------------------------------------------------ #
         close_groups: dict = {}  # underlying -> list of close legs, sorted chrono
+        all_close_orders = individual_orders + close_orders
 
-        for order in individual_orders:
+        for order in all_close_orders:
             raw_tag = str(order.get("tag", ""))
-            is_tagged_close = raw_tag.startswith("CLOSE:") or "FLATTEN" in raw_tag
-            if is_tagged_close:
-                # Extract underlying from tag JSON key "u" if available; fallback to symbol value
-                tag_data: dict = {}
-                if raw_tag.startswith("{") and raw_tag.endswith("}"):
-                    try:
-                        tag_data = json.loads(raw_tag)
-                    except Exception:
-                        tag_data = {}
-                und = str(tag_data.get("u", order.get("symbol", {}).get("value", "UNKNOWN")))
-                close_groups.setdefault(und, []).append(order)
+            is_tagged_close = (
+                raw_tag.startswith("CLOSE:") or "FLATTEN" in raw_tag or '"action":"CLOSE"' in raw_tag or '"action": "CLOSE"' in raw_tag or "exit_reason" in raw_tag
+            )
+            raw_symbol = order.get("symbol", {})
+            symbol_val = str(raw_symbol.get("value", "")) if isinstance(raw_symbol, dict) else str(raw_symbol)
+            underlying_fallback = symbol_val.split()[0] if symbol_val else "UNKNOWN"
+            tag_data = {}
+            if "{" in raw_tag:
+                try:
+                    s_idx = raw_tag.find("{")
+                    e_idx = raw_tag.rfind("}") + 1
+                    if s_idx != -1 and e_idx > s_idx:
+                        tag_data = json.loads(raw_tag[s_idx:e_idx])
+                except Exception:
+                    tag_data = {}
+            und = str(tag_data.get("u", underlying_fallback))
+            close_groups.setdefault(und, []).append(order)
 
         # For each underlying, pair close legs chronologically with open records
         for underlying, open_recs in open_queues.items():
@@ -550,6 +607,24 @@ def parse_orders_json_file(file_path: str) -> List[dict]:
 
                 pnl = round(realized_pnl, 5)
 
+                close_tag_raw = str(rep_leg.get("tag", ""))
+                close_tag_data = {}
+                m_close = re.search(r'\{.*\}', close_tag_raw)
+                if m_close:
+                    try:
+                        close_tag_data = json.loads(m_close.group(0))
+                    except Exception:
+                        close_tag_data = {}
+
+                merged_params = {}
+                try:
+                    merged_params = json.loads(open_rec.get("parameters", "{}"))
+                except Exception:
+                    merged_params = {}
+
+                if isinstance(close_tag_data, dict):
+                    merged_params.update(close_tag_data)
+
                 close_record = {
                     "pk": pk,
                     "trade_id": trade_id,
@@ -569,7 +644,7 @@ def parse_orders_json_file(file_path: str) -> List[dict]:
                     "exit_price": exit_price,
                     "pnl": pnl,
                     "exit_reason": exit_reason,
-                    "parameters": open_rec["parameters"],
+                    "parameters": json.dumps(merged_params, separators=(',', ':')) if merged_params else open_rec["parameters"],
                 }
                 rows.append(close_record)
 

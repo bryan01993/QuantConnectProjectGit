@@ -43,23 +43,37 @@ WITH closed_legs AS (
 strategy_params AS (
   SELECT 
     t.backtestId,
+    t.trade_id,
     t.underlying,
-    t.timestamp AS strategy_entry_time,
-    t.strike,
-    t.near_expiry AS short_leg_expiry,
-    t.far_expiry AS long_leg_expiry,
-    t.vol_ratio,
-    t.slope,
-    t.ivrv_ratio,
-    t.earnings_date,
-    t.parameters AS raw_parameters_json,
+    MIN(t.timestamp) AS strategy_entry_time,
+    MAX(t.strike) AS strike,
+    MAX(t.near_expiry) AS short_leg_expiry,
+    MAX(t.far_expiry) AS long_leg_expiry,
+    MAX(t.vol_ratio) AS vol_ratio,
+    MAX(t.slope) AS slope,
+    MAX(t.ivrv_ratio) AS ivrv_ratio,
+    MAX(t.earnings_date) AS earnings_date,
+    MAX(t.parameters) AS raw_parameters_json,
     -- Flatten key parameters from JSON string
-    SAFE_CAST(JSON_VALUE(t.parameters, '$.alpha_spread') AS FLOAT64) AS param_alpha_spread,
-    SAFE_CAST(JSON_VALUE(t.parameters, '$.target_dte') AS INT64) AS param_target_dte,
-    SAFE_CAST(JSON_VALUE(t.parameters, '$.holding_days') AS INT64) AS param_holding_days,
-    SAFE_CAST(JSON_VALUE(t.parameters, '$.min_vol_ratio') AS FLOAT64) AS param_min_vol_ratio
+    MAX(SAFE_CAST(JSON_VALUE(t.parameters, '$.alpha_spread') AS FLOAT64)) AS param_alpha_spread,
+    MAX(SAFE_CAST(JSON_VALUE(t.parameters, '$.target_dte') AS INT64)) AS param_target_dte,
+    MAX(SAFE_CAST(JSON_VALUE(t.parameters, '$.holding_days') AS INT64)) AS param_holding_days,
+    MAX(SAFE_CAST(JSON_VALUE(t.parameters, '$.min_vol_ratio') AS FLOAT64)) AS param_min_vol_ratio,
+    -- Per-leg IV Lifecycle Metrics (Supports long and compact JSON keys)
+    MAX(SAFE_CAST(COALESCE(JSON_VALUE(t.parameters, '$.front_iv_entry'), JSON_VALUE(t.parameters, '$.fe'), JSON_VALUE(t.parameters, '$.front_iv')) AS FLOAT64)) AS short_leg_entry_iv,
+    MAX(SAFE_CAST(COALESCE(JSON_VALUE(t.parameters, '$.front_iv_min'), JSON_VALUE(t.parameters, '$.fmin')) AS FLOAT64)) AS short_leg_min_iv,
+    MAX(SAFE_CAST(COALESCE(JSON_VALUE(t.parameters, '$.front_iv_max'), JSON_VALUE(t.parameters, '$.fmax')) AS FLOAT64)) AS short_leg_max_iv,
+    MAX(SAFE_CAST(COALESCE(JSON_VALUE(t.parameters, '$.front_iv_exit'), JSON_VALUE(t.parameters, '$.fx')) AS FLOAT64)) AS short_leg_exit_iv,
+    MAX(SAFE_CAST(COALESCE(JSON_VALUE(t.parameters, '$.front_iv_change_pct'), JSON_VALUE(t.parameters, '$.fchg')) AS FLOAT64)) AS short_leg_iv_change_pct,
+    MAX(SAFE_CAST(COALESCE(JSON_VALUE(t.parameters, '$.back_iv_entry'), JSON_VALUE(t.parameters, '$.be'), JSON_VALUE(t.parameters, '$.back_iv')) AS FLOAT64)) AS long_leg_entry_iv,
+    MAX(SAFE_CAST(COALESCE(JSON_VALUE(t.parameters, '$.back_iv_min'), JSON_VALUE(t.parameters, '$.bmin')) AS FLOAT64)) AS long_leg_min_iv,
+    MAX(SAFE_CAST(COALESCE(JSON_VALUE(t.parameters, '$.back_iv_max'), JSON_VALUE(t.parameters, '$.bmax')) AS FLOAT64)) AS long_leg_max_iv,
+    MAX(SAFE_CAST(COALESCE(JSON_VALUE(t.parameters, '$.back_iv_exit'), JSON_VALUE(t.parameters, '$.bx')) AS FLOAT64)) AS long_leg_exit_iv,
+    MAX(SAFE_CAST(COALESCE(JSON_VALUE(t.parameters, '$.back_iv_change_pct'), JSON_VALUE(t.parameters, '$.bchg')) AS FLOAT64)) AS long_leg_iv_change_pct,
+    MAX(SAFE_CAST(COALESCE(JSON_VALUE(t.parameters, '$.net_iv_crush_diff'), JSON_VALUE(t.parameters, '$.net')) AS FLOAT64)) AS net_iv_crush_diff
   FROM `bav-personal-cloud.develop.BTOPTrades` t
-  WHERE t.action = 'OPEN'
+  WHERE t.action IN ('OPEN', 'CLOSE')
+  GROUP BY t.backtestId, t.trade_id, t.underlying
 ),
 matched AS (
   SELECT 
@@ -75,6 +89,17 @@ matched AS (
     s.param_target_dte,
     s.param_holding_days,
     s.param_min_vol_ratio,
+    s.short_leg_entry_iv,
+    s.short_leg_min_iv,
+    s.short_leg_max_iv,
+    s.short_leg_exit_iv,
+    s.short_leg_iv_change_pct,
+    s.long_leg_entry_iv,
+    s.long_leg_min_iv,
+    s.long_leg_max_iv,
+    s.long_leg_exit_iv,
+    s.long_leg_iv_change_pct,
+    s.net_iv_crush_diff,
     s.raw_parameters_json,
     ROW_NUMBER() OVER(
       PARTITION BY c.engine_trade_id 
@@ -127,6 +152,18 @@ SELECT
   param_target_dte,
   param_holding_days,
   param_min_vol_ratio,
+  -- Per-Leg IV Lifecycle Metrics
+  short_leg_entry_iv,
+  short_leg_min_iv,
+  short_leg_max_iv,
+  short_leg_exit_iv,
+  short_leg_iv_change_pct,
+  long_leg_entry_iv,
+  long_leg_min_iv,
+  long_leg_max_iv,
+  long_leg_exit_iv,
+  long_leg_iv_change_pct,
+  net_iv_crush_diff,
   raw_parameters_json,
   _ingested_at
 FROM matched

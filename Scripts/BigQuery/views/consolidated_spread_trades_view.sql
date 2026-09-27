@@ -46,6 +46,18 @@ paired_spreads AS (
     MAX(slope) AS slope,
     MAX(ivrv_ratio) AS ivrv_ratio,
     MAX(earnings_date) AS earnings_date,
+    -- Per-Leg IV Lifecycle Metrics
+    MAX(short_leg_entry_iv) AS short_leg_entry_iv,
+    MAX(short_leg_min_iv) AS short_leg_min_iv,
+    MAX(short_leg_max_iv) AS short_leg_max_iv,
+    MAX(short_leg_exit_iv) AS short_leg_exit_iv,
+    MAX(short_leg_iv_change_pct) AS short_leg_iv_change_pct,
+    MAX(long_leg_entry_iv) AS long_leg_entry_iv,
+    MAX(long_leg_min_iv) AS long_leg_min_iv,
+    MAX(long_leg_max_iv) AS long_leg_max_iv,
+    MAX(long_leg_exit_iv) AS long_leg_exit_iv,
+    MAX(long_leg_iv_change_pct) AS long_leg_iv_change_pct,
+    MAX(net_iv_crush_diff) AS net_iv_crush_diff,
     MAX(raw_parameters_json) AS raw_parameters_json
   FROM enriched_legs
   GROUP BY 
@@ -99,5 +111,20 @@ SELECT
   slope,
   ivrv_ratio,
   earnings_date,
+  -- Per-Leg IV Lifecycle Metrics
+  short_leg_entry_iv,
+  short_leg_min_iv,
+  short_leg_max_iv,
+  short_leg_exit_iv,
+  short_leg_iv_change_pct,
+
+  long_leg_entry_iv,
+  long_leg_min_iv,
+  long_leg_max_iv,
+  long_leg_exit_iv,
+  long_leg_iv_change_pct,
+
+  net_iv_crush_diff,
   raw_parameters_json
+
 FROM paired_spreads;

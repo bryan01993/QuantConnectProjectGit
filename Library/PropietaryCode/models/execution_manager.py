@@ -2,8 +2,33 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, time, timedelta
-from typing import Any, Dict, List, Optional, Set
-from AlgorithmImports import *
+try:
+    from AlgorithmImports import *
+except ImportError:
+    pass
+
+if "ExecutionModel" not in globals():
+    class ExecutionModel: pass
+if "QCAlgorithm" not in globals():
+    class QCAlgorithm: pass
+if "Symbol" not in globals():
+    class Symbol: pass
+if "OptionRight" not in globals():
+    class OptionRight:
+        Call = 0
+        Put = 1
+if "Slice" not in globals():
+    class Slice: pass
+if "Leg" not in globals():
+    class Leg:
+        @staticmethod
+        def Create(*args, **kwargs): return None
+if "UpdateOrderFields" not in globals():
+    class UpdateOrderFields: pass
+if "OrderStatus" not in globals():
+    class OrderStatus:
+        Submitted = 1
+        New = 0
 
 from .alpha_model import CalendarSpreadOpportunity
 

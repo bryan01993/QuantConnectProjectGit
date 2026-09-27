@@ -51,6 +51,12 @@ def main():
         except Exception as e:
             logging.error(f"Failed to ingest BTOPOrders for {real_backtest_id}: {e}")
 
+    download_object_store_file(
+        backtest_id=real_backtest_id,
+        api_token=api_token,
+        project_id=project_id
+    )
+
     if results_path:
         inspect_api_response(response_data)
         write_results_to_database(results_path, real_backtest_id)
@@ -287,10 +293,11 @@ def download_backtest_logs(backtest_id: str, api_token: Dict[str, str], project_
         headers = _auth_headers(api_token)
 
         start = 0
-        chunk = 100
+        chunk = 500
         all_logs: List[str] = []
+        consecutive_empty = 0
 
-        while True:
+        while start < 200000:
             payload = {
                 "projectId": project_id,
                 "backtestId": backtest_id,
@@ -301,13 +308,17 @@ def download_backtest_logs(backtest_id: str, api_token: Dict[str, str], project_
             r = requests.post(api_url, headers=headers, json=payload, timeout=60)
             r.raise_for_status()
             data = r.json()
+            if not data.get("success"):
+                break
             logs = data.get("logs", [])
-            if not data.get("success") or not logs:
-                break
-            all_logs.extend(logs)
+            if logs:
+                all_logs.extend(logs)
+                consecutive_empty = 0
+            else:
+                consecutive_empty += 1
+                if consecutive_empty >= 10:
+                    break
             start += chunk
-            if len(logs) < chunk:
-                break
 
         with open(log_path, "w", encoding="utf-8") as f:
             for l in all_logs:
@@ -318,6 +329,32 @@ def download_backtest_logs(backtest_id: str, api_token: Dict[str, str], project_
     except Exception as e:
         logging.error(f"Failed to fetch logs for backtest {backtest_id}: {e}")
         return None
+
+
+def download_object_store_file(backtest_id: str, api_token: Dict[str, str], project_id: int) -> Optional[str]:
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        os_dir = os.path.abspath(os.path.join(script_dir, "..", "object_store"))
+        os.makedirs(os_dir, exist_ok=True)
+        os_path = os.path.join(os_dir, f"BT_TRADES_{backtest_id}.json")
+
+        api_url = "https://www.quantconnect.com/api/v2/object-store/read"
+        headers = _auth_headers(api_token)
+        payload = {
+            "projectId": project_id,
+            "key": f"BT_TRADES_{backtest_id}.json"
+        }
+        r = requests.post(api_url, headers=headers, json=payload, timeout=60)
+        data = r.json()
+        if data.get("success") and "object" in data:
+            content = data["object"]
+            with open(os_path, "w", encoding="utf-8") as f:
+                f.write(content if isinstance(content, str) else json.dumps(content))
+            logging.info(f"Downloaded ObjectStore file to: {os_path}")
+            return os_path
+    except Exception as e:
+        logging.error(f"Failed to fetch ObjectStore file for {backtest_id}: {e}")
+    return None
 
 
 def inspect_api_response(response_data):

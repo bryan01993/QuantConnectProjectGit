@@ -1,9 +1,32 @@
 from __future__ import annotations
 
+try:
+    from AlgorithmImports import *
+except ImportError:
+    pass
+
+if "AlphaModel" not in globals():
+    class AlphaModel: pass
+if "QCAlgorithm" not in globals():
+    class QCAlgorithm: pass
+if "Symbol" not in globals():
+    class Symbol: pass
+if "OptionRight" not in globals():
+    class OptionRight:
+        Call = 0
+        Put = 1
+if "Insight" not in globals():
+    class Insight: pass
+if "InsightDirection" not in globals():
+    class InsightDirection:
+        Up = 1
+        Down = -1
+if "Slice" not in globals():
+    class Slice: pass
+
 from dataclasses import dataclass
 from datetime import datetime, timedelta, date
 from typing import List, Dict, Any, Optional, Set, Tuple
-from AlgorithmImports import *
 
 
 @dataclass

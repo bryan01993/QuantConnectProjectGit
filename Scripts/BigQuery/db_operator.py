@@ -201,20 +201,30 @@ def _load_via_ndjson(client: bigquery.Client, table_id: str, rows: Iterable[Dict
             pass
 
 
-def insert_rows_with_logging(client: bigquery.Client, table_id: str, rows_to_insert: List[Dict[str, Any]]) -> None:
+def insert_rows_with_logging(client: bigquery.Client, table_id: str, rows_to_insert: List[Dict], chunk_size: int = 500) -> None:
     """
-    Inserts rows into the given BigQuery table and logs any errors.
+    Inserts rows into the given BigQuery table in chunks to avoid HTTP 10MB payload limits and logs any errors.
 
     Args:
         client (bigquery.Client): The BigQuery client.
         table_id (str): The full table ID ("dataset.table").
         rows_to_insert (List[Dict]): The rows to insert.
+        chunk_size (int): Max rows per insert batch (default 500).
     """
-    errors = client.insert_rows_json(table_id, rows_to_insert)
-    if errors:
-        print(f"Errors inserting into {table_id}: {errors}")
+    if not rows_to_insert:
+        return
+
+    all_errors = []
+    for i in range(0, len(rows_to_insert), chunk_size):
+        chunk = rows_to_insert[i:i + chunk_size]
+        errors = client.insert_rows_json(table_id, chunk)
+        if errors:
+            all_errors.extend(errors)
+
+    if all_errors:
+        print(f"Errors inserting into {table_id}: {all_errors[:5]} (total {len(all_errors)} errors)")
     else:
-        print(f"Successfully inserted rows into {table_id}")
+        print(f"Successfully inserted {len(rows_to_insert)} rows into {table_id}")
 
 
 def load_json_to_bigquery(

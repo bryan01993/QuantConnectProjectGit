@@ -48,6 +48,57 @@ class BsmModel:
 BSMModel = BsmModel
 
 
+import math
+from typing import Optional, Union
+
+def fast_norm_cdf(x: float) -> float:
+    """Standard normal cumulative distribution function using math.erf (100x faster than scipy)."""
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+def fast_norm_pdf(x: float) -> float:
+    """Standard normal probability density function."""
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+def fast_bs_price(right: Union[int, str], S: float, K: float, T: float, r: float, sigma: float) -> float:
+    """Fast Black-Scholes formula price for Call and Put options."""
+    if T <= 0.0 or sigma <= 0.0 or S <= 0.0 or K <= 0.0:
+        return 0.0
+    d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+    is_call = (right == 0 or str(right).lower() in ("c", "call", "optionright.call"))
+    if is_call:
+        return S * fast_norm_cdf(d1) - K * math.exp(-r * T) * fast_norm_cdf(d2)
+    else:
+        return K * math.exp(-r * T) * fast_norm_cdf(-d2) - S * fast_norm_cdf(-d1)
+
+def fast_vega(S: float, K: float, T: float, r: float, sigma: float) -> float:
+    """Calculates Option Vega."""
+    if T <= 0.0 or sigma <= 0.0 or S <= 0.0 or K <= 0.0:
+        return 0.0
+    d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
+    return S * fast_norm_pdf(d1) * math.sqrt(T)
+
+def fast_implied_volatility_newton(right: Union[int, str], S: float, K: float, T: float, r: float, market_price: float) -> Optional[float]:
+    """Fast Newton-Raphson solver for Black-Scholes implied volatility."""
+    if market_price <= 0.0 or S <= 0.0 or K <= 0.0 or T <= 0.0:
+        return None
+    sigma = 0.30
+    for _ in range(15):
+        price = fast_bs_price(right, S, K, T, r, sigma)
+        diff = price - market_price
+        if abs(diff) < 1e-4:
+            return sigma
+        v = fast_vega(S, K, T, r, sigma)
+        if v < 1e-6:
+            break
+        sigma = sigma - diff / v
+        if sigma <= 0.01:
+            sigma = 0.01
+        elif sigma > 5.0:
+            sigma = 5.0
+    return sigma if abs(fast_bs_price(right, S, K, T, r, sigma) - market_price) < 0.05 else None
+
+
 if __name__ == "__main__":
     a = BsmModel('c', 42, 35, 0.1, 90.0, 0.2)
     a.bsm_price()
