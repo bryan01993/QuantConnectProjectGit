@@ -78,10 +78,13 @@ class CalendarSpreadExecutionManager(ExecutionModel):
         near_tag = self.algo.BuildOrderTag(underlying, front, back, metrics, "SHORT")
         far_tag = self.algo.BuildOrderTag(underlying, front, back, metrics, "LONG")
 
+        slippage_penalty = round(comb_spread * 0.15, 2)
+        mid_debit_realistic = min(natural_ask, max(0.01, round(mid_debit + slippage_penalty, 2)))
+
         tickets = []
         is_adaptive = False
         if method == "combo_limit_mid":
-            limit_price = mid_debit
+            limit_price = mid_debit_realistic
             tickets = self.algo.ComboLimitOrder(legs, qty, limit_price)
         elif method == "combo_market":
             limit_price = natural_ask

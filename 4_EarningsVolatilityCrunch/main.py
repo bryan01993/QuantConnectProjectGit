@@ -175,12 +175,29 @@ class EarningsVolatilityCrunch(QCAlgorithm):
                     for s_key, pos in list(self.active_spreads.items()):
                         if pos.get("underlying") == underlying:
                             back = pos.get("back")
+                            front = pos.get("front")
                             if back and self.Portfolio.ContainsKey(back) and self.Portfolio[back].Invested:
                                 back_qty = self.Portfolio[back].Quantity
                                 self.MarketOrder(back, -back_qty, tag="FLATTEN: Emergency Long Leg Cut Post-Assignment")
-                            self.UnsubscribeOption(pos.get("front"))
+                            self.UnsubscribeOption(front)
                             self.UnsubscribeOption(back)
                             self.active_spreads.pop(s_key, None)
+
+                            # Record emergency exit in BigQuery telemetry (L-02)
+                            entry_debit = float(pos.get("entry_price", 0.0))
+                            self.LogTradeRecord(
+                                action="CLOSE",
+                                underlying=underlying,
+                                front=front,
+                                back=back,
+                                qty=int(pos.get("qty", 1)),
+                                price=entry_debit,
+                                metrics=pos.get("metrics", {}),
+                                pk=pos.get("pk"),
+                                exit_price=0.0,
+                                pnl=-1.0,
+                                exit_reason="FLATTEN: Assignment Stock Emergency"
+                            )
 
         self.SweepOrphanedOptionLegs()
         self.execution_manager.ManagePositions(data)
@@ -331,16 +348,23 @@ class EarningsVolatilityCrunch(QCAlgorithm):
             return None
 
         vol_series, close_series = df[vol_col], df[close_col]
-        recent_volume, avg_volume = float(vol_series.iloc[-1]), float(vol_series.iloc[-31:-1].mean())
+        vol_vals = vol_series.to_numpy(dtype=float)
+        close_vals = close_series.to_numpy(dtype=float)
+        if len(vol_vals) < 31 or len(close_vals) < 31:
+            return None
+
+        recent_volume, avg_volume = float(vol_vals[-1]), float(np.mean(vol_vals[-31:-1]))
         if not avg_volume or math.isnan(recent_volume) or math.isnan(avg_volume) or avg_volume <= 0:
             return None
 
         vol_ratio = recent_volume / avg_volume
-        self._underlying_prices[underlying] = float(close_series.iloc[-1])
-        returns = close_series.pct_change().dropna()
+        self._underlying_prices[underlying] = float(close_vals[-1])
+        
+        # Vectorized NumPy calculation avoids Pandas DataFrame heap churn (M-03)
+        returns = np.diff(close_vals[-31:]) / close_vals[-31:-1]
         if len(returns) < 30:
             return None
-        realized_volatility = float(returns.iloc[-30:].std() * math.sqrt(252))
+        realized_volatility = float(np.std(returns, ddof=1) * math.sqrt(252))
 
         result = (vol_ratio, realized_volatility)
         self._metrics_cache[cache_key] = result
@@ -504,7 +528,7 @@ class EarningsVolatilityCrunch(QCAlgorithm):
                         back_exit_fill = info["exit_fills"].get(info["back"], 0.0)
                         
                         actual_exit_credit = round(back_exit_fill - front_exit_fill, 5)
-                        exit_price = max(0.0, actual_exit_credit)
+                        exit_price = actual_exit_credit
                         
                         entry_debit = info["entry_price"]
                         realized_pnl = round((exit_price - entry_debit) / entry_debit, 5) if entry_debit > 0 else 0.0
@@ -533,9 +557,9 @@ class EarningsVolatilityCrunch(QCAlgorithm):
                         back_iv_crush_diff = round(back_iv_open - back_iv_close, 5)
 
                         metrics = {
-                            "vol_ratio": info["vol_ratio"],
-                            "slope": info["slope"],
-                            "ivrv_ratio": info["ivrv_ratio"],
+                            "vol_ratio": float(info.get("vol_ratio", info.get("metrics", {}).get("vol_ratio", 0.0))),
+                            "slope": float(info.get("slope", info.get("metrics", {}).get("slope", 0.0))),
+                            "ivrv_ratio": float(info.get("ivrv_ratio", info.get("metrics", {}).get("ivrv_ratio", 0.0))),
                             "mae_pct": info.get("mae_pct", 0.0),
                             "mfe_pct": info.get("mfe_pct", 0.0),
                             "holding_hours": holding_hours,
@@ -560,9 +584,9 @@ class EarningsVolatilityCrunch(QCAlgorithm):
                         
                         self.trade_history[underlying].append({
                             "pnl": pnl,
-                            "entry_slope": info["slope"],
-                            "entry_vol_ratio": info["vol_ratio"],
-                            "entry_ivrv_ratio": info["ivrv_ratio"],
+                            "entry_slope": float(info.get("slope", info.get("metrics", {}).get("slope", 0.0))),
+                            "entry_vol_ratio": float(info.get("vol_ratio", info.get("metrics", {}).get("vol_ratio", 0.0))),
+                            "entry_ivrv_ratio": float(info.get("ivrv_ratio", info.get("metrics", {}).get("ivrv_ratio", 0.0))),
                             "exit_time": self.Time.isoformat()
                         })
                         self.trade_history[underlying] = self.trade_history[underlying][-20:]
@@ -573,7 +597,7 @@ class EarningsVolatilityCrunch(QCAlgorithm):
 
                         self.UnsubscribeOption(info["front"])
                         self.UnsubscribeOption(info["back"])
-                        self.active_spreads.pop(info["pk"], None)
+                        self.active_spreads.pop(info.get("pk"), None)
                         
                         for o_id in list(self._pending_exit_tickets.keys()):
                             if self._pending_exit_tickets[o_id] is info:
@@ -602,7 +626,11 @@ class EarningsVolatilityCrunch(QCAlgorithm):
         self.execution_manager.ManagePositions(data)
 
     def SweepOrphanedOptionLegs(self) -> None:
-        all_positions = list(self.active_spreads.values()) + [p for p in getattr(self, "_pending_exit_tickets", {}).values() if isinstance(p, dict)]
+        all_positions = (
+            list(self.active_spreads.values())
+            + [p for p in getattr(self, "_pending_exit_tickets", {}).values() if isinstance(p, dict)]
+            + [p for p in getattr(self, "_pending_entry_tickets", {}).values() if isinstance(p, dict)]
+        )
         active_contracts = {p[k] for p in all_positions for k in ("front", "back") if k in p}
         active_underlyings = {p["underlying"] for p in all_positions if "underlying" in p}
 
@@ -619,6 +647,32 @@ class EarningsVolatilityCrunch(QCAlgorithm):
                     if sec.Quantity > 0:
                         self.Log(f"[ORPHAN SWEEPER] Liquidating unhedged long leg: {sec.Symbol.Value} Qty: {sec.Quantity}")
                         self.MarketOrder(sec.Symbol, -sec.Quantity, tag="FLATTEN: Orphaned Long Leg Sweep")
+                    elif sec.Quantity < 0:
+                        self.Log(f"[ORPHAN SWEEPER] Liquidating unhedged short leg: {sec.Symbol.Value} Qty: {sec.Quantity}")
+                        self.MarketOrder(sec.Symbol, abs(sec.Quantity), tag="FLATTEN: Orphaned Short Leg Sweep")
+
+        # Check for desynchronized entry legs (one filled, other pending for >= 30m) (L-05)
+        now = self.Time
+        for o_id, info in list(self._pending_entry_tickets.items()):
+            if not isinstance(info, dict):
+                continue
+            fills = info.get("entry_fills", {})
+            entry_time = info.get("entry_time", now)
+            elapsed_minutes = (now - entry_time).total_seconds() / 60.0
+            if elapsed_minutes >= 30.0 and len(fills) == 1:
+                self.Log(f"[ORPHAN TIMEOUT] Desynchronized entry for {info.get('underlying')}: 1 leg filled after {elapsed_minutes:.1f}m. Aborting.")
+                for t in info.get("tickets", []):
+                    if hasattr(t, "Status") and t.Status in [OrderStatus.Submitted, OrderStatus.New]:
+                        try:
+                            t.Cancel("Canceling desynchronized unfilled entry leg")
+                        except Exception:
+                            pass
+                for sym in fills.keys():
+                    if self.Portfolio.ContainsKey(sym) and self.Portfolio[sym].Invested:
+                        qty = self.Portfolio[sym].Quantity
+                        if qty != 0:
+                            self.MarketOrder(sym, -qty, tag="FLATTEN: Desynchronized Entry Leg Sweep")
+                self._pending_entry_tickets.pop(o_id, None)
 
     def LiquidateSpread(self, spread_key: Any, tag: str) -> bool:
         return self.execution_manager.LiquidateSpread(spread_key, tag)
